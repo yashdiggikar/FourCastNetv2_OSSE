@@ -1,5 +1,7 @@
 # FourCastNetv2_OSSE
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24092591.svg)](https://doi.org/10.5281/zenodo.24092591)
+
 Observing System Simulation Experiment (OSSE) **truth-insertion** framework for NVIDIA
 **FourCastNet v2-small** (SFNO, 0.25°, 73 channels, 13 pressure levels), implemented as a fork of
 NVIDIA **earth2mip** (`github.com/yashdiggikar/OSSE-FourCastNetv2`). Released with the
@@ -104,5 +106,6 @@ Apache-2.0 (`LICENSE`, inherited from NVIDIA earth2mip). See `NOTICE` for the mo
 Model weights are not included.
 
 ## Citation
-See `CITATION.cff`. Please also cite: Bonev, B., et al. (2023), Spherical Fourier Neural
+Diggikar, Y., Halem, M., & Raman, A. (2026). *FourCastNetv2_OSSE* (Version 1.0.0) [Software]. Zenodo. https://doi.org/10.5281/zenodo.24092592
+(All versions: https://doi.org/10.5281/zenodo.24092591.) See also `CITATION.cff`. Please also cite: Bonev, B., et al. (2023), Spherical Fourier Neural
 Operators: Learning stable dynamics on the sphere, *ICML 2023*, PMLR 202, 2806–2823.
