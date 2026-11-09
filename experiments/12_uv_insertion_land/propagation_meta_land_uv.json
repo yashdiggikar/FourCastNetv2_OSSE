@@ -1,0 +1,16 @@
+{
+  "exp_name": "land_uv",
+  "ins_type": "uv",
+  "var_label": "U @ 500 hPa (m/s)",
+  "vmax": 23.2,
+  "day_labels": [
+    "First Injection (Day 30)",
+    "Day 45",
+    "Day 60"
+  ],
+  "shape": [
+    3,
+    721,
+    1440
+  ]
+}

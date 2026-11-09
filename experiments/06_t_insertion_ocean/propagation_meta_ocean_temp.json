@@ -1,0 +1,16 @@
+{
+  "exp_name": "ocean_temp",
+  "ins_type": "temp",
+  "var_label": "T @ 500 hPa (K)",
+  "vmax": 9.4,
+  "day_labels": [
+    "First Injection (Day 30)",
+    "Day 45",
+    "Day 60"
+  ],
+  "shape": [
+    3,
+    721,
+    1440
+  ]
+}

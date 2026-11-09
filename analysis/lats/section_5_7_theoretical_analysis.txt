@@ -1,0 +1,372 @@
+================================================================================
+SECTION 5.7 — LATITUDE-BAND / DYNAMICAL-REGIME ANALYSIS
+THEORETICAL AND PHYSICAL INTERPRETATION
+FourCastNetv2 (FCNv2) | IC: 2023-02-01 | Lead day 0–60
+================================================================================
+
+Written: 2026-06-01
+Model: FourCastNetv2 (Adaptive Fourier Neural Operator, AFNO)
+Analysis: Latitude-band RMSE time series, 4 FCN runs vs ERA5 truth
+
+
+────────────────────────────────────────────────────────────────────────────────
+1.  WHY LATITUDE MATTERS FOR ML WEATHER FORECAST ERROR
+────────────────────────────────────────────────────────────────────────────────
+
+A global atmospheric model encodes physics implicitly through training data
+statistics. The atmosphere, however, operates under strongly latitude-dependent
+dynamics:
+
+  • Tropics (|lat| < 30°): Dominated by convective instability, diabatic
+    heating, and the ITCZ. The Rossby number is O(1) or larger, so geostrophic
+    balance does NOT hold. Energy cascades are dominated by convective towers
+    and equatorial waves (Kelvin, Rossby, MJO). Predictability is limited by
+    convective organisation, typically 1–2 weeks.
+
+  • Midlatitudes (30°–60°): Baroclinic instability drives synoptic cyclone
+    growth. The quasi-geostrophic (QG) framework applies: thermal wind balance
+    links horizontal temperature gradients to vertical wind shear.
+    Predictability in this regime extends ~2 weeks for synoptic systems.
+    Baroclinic eddies transfer energy from the mean flow to growing disturbances.
+
+  • Polar regions (|lat| > 60°): Strong planetary boundary layer effects,
+    sea-ice interactions, and stratospheric coupling. The flow is nearly
+    barotropic. Long Rossby wave propagation dominates interannual variability.
+    FCNv2 sees relatively sparse training data at high latitudes due to
+    polar night and the scarcity of radiosonde observations assimilated into
+    ERA5.
+
+An AFNO model trained on ERA5 learns spatial correlations across these regimes
+simultaneously. However, the spectral basis functions (Fourier modes) used in
+AFNO are global — they do not have an inherent latitude-dependent weighting.
+This means errors in the highly energetic midlatitude baroclinic zone can
+project onto tropical and polar Fourier modes, causing cross-band error
+contamination not present in classical NWP models.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2.  EXPECTED RMSE PROFILES BY LATITUDE BAND
+────────────────────────────────────────────────────────────────────────────────
+
+2.1  T500 RMSE by latitude:
+──────────────────────────
+  Tropics: Low initial RMSE (tropical temperature is relatively stable),
+  slow growth (convective parameterisation not active in FCNv2), eventual
+  plateau. Insertion of any variable should have modest tropical T500 impact
+  because FCNv2 cannot represent diabatic processes.
+
+  Midlatitudes: High initial RMSE growth rate due to baroclinic instability.
+  The mature phase RMSE is dominated by the model's inability to correctly
+  simulate cyclone lifecycle beyond predictability limit. Temperature insertion
+  directly corrects T500; Z-insertion corrects T500 indirectly via hypsometric
+  balance. Wind insertion's T500 correction is weakest here because
+  thermal-wind is not the limiting error.
+
+  Polar: Moderate RMSE, growth is slower. Corrections propagate more slowly
+  due to lower phase speeds. The model likely has systematic cold/warm biases
+  at high latitudes from ERA5 training data characteristics.
+
+2.2  Z500 RMSE by latitude:
+───────────────────────────
+  Z500 is the master dynamical variable. Its RMSE characterises how well the
+  model tracks the large-scale circulation pattern.
+
+  Tropics: Z500 variations are small (tropical troposphere is nearly
+  barotropic). RMSE is numerically small in absolute terms but percentage
+  errors can be large. Insertion of Z500 should provide a large fractional
+  improvement in the tropics.
+
+  Midlatitudes: Largest absolute Z500 RMSE because amplitude of ridge-trough
+  systems is 200–800 m²/s². Rapid error growth during baroclinic life cycle.
+  Z-insertion provides the largest absolute improvement here. T-insertion
+  corrects Z500 via hypsometric balance: ΔZ500 ~ (R/g) × Δ(T̄) × Δ(ln p).
+
+  Polar: Z500 errors are dominated by Rossby wave propagation from midlatitude
+  source regions. Corrections introduced at midlatitudes propagate poleward,
+  producing lagged improvements in polar Z500.
+
+2.3  Wind500 (U500, V500) RMSE by latitude:
+────────────────────────────────────────────
+  The thermal-wind relationship connects ∂u/∂p to ∂T/∂y. In midlatitudes
+  where this balance is approximately maintained, T-insertion should reduce
+  U500 RMSE significantly. In the tropics where the balance breaks down,
+  T-insertion's effect on winds is weaker or absent.
+
+  Wind-insertion directly corrects U500 and V500 in the midlatitudes where
+  baroclinic instability drives large wind errors. Tropical impact is limited
+  by the dominance of convective, not geostrophic, dynamics.
+
+2.4  Wind10m RMSE by latitude:
+───────────────────────────────
+  Near-surface winds are influenced by the boundary layer (not represented in
+  FCNv2's 500 hPa insertion experiments) and by surface friction, which varies
+  greatly between ocean and land. Wind10m RMSE is expected to be:
+  - Moderate in tropics (trade winds, relatively steady)
+  - High over midlatitude storm tracks (rapid cyclone-induced gusts)
+  - High in polar regions (katabatic winds, sea-ice edge dynamics)
+
+  Upper-level insertions propagate to surface winds through geostrophic coupling,
+  but this pathway is indirect and involves boundary-layer processes not
+  explicitly represented in FCNv2.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3.  WHAT THE TIME SERIES STRUCTURE TELLS US
+────────────────────────────────────────────────────────────────────────────────
+
+3.1  Two phases of RMSE growth:
+
+  Phase 1 — IC information regime (day 0–~14):
+    RMSE grows approximately as a power law. The inserted ERA5 truth provides
+    a "corrected" starting point. In this phase, insertions should show the
+    largest RMSE reduction because the forecast is still close to its IC.
+    Latitude band differences reflect how quickly each regime "forgets" the IC.
+
+  Phase 2 — Error saturation regime (day ~14–60):
+    RMSE growth slows and the spread between runs narrows as all models lose
+    skill. In the mature phase (day 30–60), RMSE reflects the intrinsic model
+    climatological bias rather than IC sensitivity.
+
+  The transition between phases is latitude-dependent:
+  - Tropics: transition occurs later (~day 20–30) due to slower error growth
+  - Midlatitudes: transition occurs ~day 10–15 (fast baroclinic instability)
+  - Polar: transition occurs ~day 20–25 (slow Rossby wave propagation)
+
+3.2  Cross-run comparison within a lat band:
+    On each panel (one variable, one lat band), all 4 run lines are shown:
+    - Separation between control and insertions quantifies information gain
+    - Crossovers between insertion runs indicate regime-specific coupling
+    - Lines converging in the mature phase → insertion has temporary effect only
+    - Lines remaining separated in mature phase → insertion corrects systematic bias
+
+3.3  Inter-band comparison:
+    Comparing the same insertion effect across columns (Tropics / Midlats / Polar):
+    - Larger separation in midlatitudes → insertion leverages baroclinic coupling
+    - Larger separation in tropics → insertion targets tropical moisture or T gradient
+    - Roughly equal impact across bands → insertion corrects a global systematic bias
+
+
+────────────────────────────────────────────────────────────────────────────────
+4.  EXPECTED PHYSICAL RESULTS PER INSERTION TYPE
+────────────────────────────────────────────────────────────────────────────────
+
+4.1  Temperature Insertion (T-ins):
+
+  Mechanism: By correcting T500 toward ERA5 truth, we restore the horizontal
+  temperature gradients that drive thermal-wind balance and vertical motion
+  through the omega equation.
+
+  Expected lat-band response:
+  - Midlatitudes: Strongest RMSE reduction for U500 and Z500 via thermal-wind.
+    The QG height tendency equation: ∂Z/∂t = -f₀⁻¹ (u·∇Z + f·∇Z) + ...
+    includes diabatic heating via hypsometric coupling.
+  - Tropics: Modest reduction. Tropical T500 gradients are weak; the
+    temperature-wind coupling is weak without Coriolis.
+  - Polar: Moderate reduction. Polar vortex stability depends on Arctic
+    temperature anomalies; T-insertion may correct jet stream position.
+
+  Physical interpretation of underperformance: "Analysis shock" — inserting
+  a corrected temperature field into a model that has adjusted its other
+  variables to be consistent with the wrong temperature creates imbalances.
+  These imbalances generate spurious gravity waves that can temporarily
+  increase RMSE before the model re-balances.
+
+4.2  Wind Insertion (Wind-ins):
+
+  Mechanism: Correcting U500 and V500 restores the horizontal momentum, which
+  influences temperature advection (∂T/∂t = -u·∇T + ...) and pressure tendency
+  (∂Z/∂t includes the geostrophic wind component).
+
+  Expected lat-band response:
+  - Midlatitudes: Largest Z500 and T500 response because midlatitude dynamics
+    are momentum-controlled. Baroclinic instability requires correct wind shear.
+  - Tropics: Limited T500 response because tropical temperature anomalies are
+    driven by convection, not horizontal advection.
+  - Polar: Moderate response via stratospheric-tropospheric coupling and
+    planetary wave propagation.
+
+4.3  Geopotential Insertion (Z-ins):
+
+  Mechanism: Z500 represents the depth of the 500 hPa layer, which determines
+  the geostrophic wind via: u_g = -(g/f₀)(∂Z/∂y), v_g = (g/f₀)(∂Z/∂x).
+  Inserting Z500 restores both the geostrophic balance and the mass field.
+
+  Expected lat-band response:
+  - Midlatitudes: Simultaneous correction of T500 (hypsometric) and winds
+    (geostrophic). Should have the broadest corrective effect.
+  - Tropics: Strong Z500 correction but weak wind response (Coriolis near zero).
+    However, tropical Z500 is tightly coupled to deep convective heating.
+  - Polar: Correct representation of the polar vortex geopotential is critical
+    for Arctic oscillation and stratospheric coupling.
+
+  Key insight: Z-insertion is expected to be the "master correction" because Z500
+  contains the integrated information about both temperature (hypsometric) and
+  wind (geostrophic) simultaneously. This should show up as the largest % RMSE
+  reduction across all latitude bands for all diagnostic variables.
+
+
+────────────────────────────────────────────────────────────────────────────────
+5.  ML ARCHITECTURE PERSPECTIVE ON LATITUDE-DEPENDENT ERRORS
+────────────────────────────────────────────────────────────────────────────────
+
+5.1  AFNO's spectral processing and latitude bias:
+  The Adaptive Fourier Neural Operator processes atmospheric fields in
+  spectral (wavenumber) space. The DFT assumes periodic, homogeneous fields.
+  The real atmosphere is NOT homogeneous in latitude:
+  - Meridional temperature gradient drives the jet stream
+  - Rossby radius of deformation varies as ~N*H/f ∝ 1/sin(lat)
+    (diverges at the equator)
+  - The deformation radius at 60°N is ~3× smaller than at 30°N
+
+  This means AFNO's fixed spectral basis is a natural fit for midlatitude
+  synoptic systems (Rossby deformation radius ~1000 km) but a poor fit for:
+  - Tropical mesoscale convection (100–500 km, non-geostrophic)
+  - Polar vortex (hemispheric scale, wavenumber 1–3)
+
+5.2  Training data imbalance:
+  ERA5 training data represents 40 years of global reanalysis. Density of
+  observational input to ERA5 is highest in the Northern Hemisphere midlatitudes
+  (radiosondes, aircraft) and lowest over the Southern Ocean and Arctic.
+  FCNv2 trained on this data likely learns better atmospheric dynamics in the
+  data-rich midlatitudes than in polar or remote ocean regions.
+
+  Implication for insertion experiments:
+  - In midlatitudes where training data is dense, the FCNv2 internal dynamics
+    are better calibrated. Insertions are more "compatible" with the model's
+    learned physics. Recovery after insertion is faster and more stable.
+  - In polar regions, the model may over-correct or show oscillatory behaviour
+    after insertion because the model's dynamics are less well-constrained.
+
+5.3  Cosine-latitude weighting effects:
+  The global-mean error metrics used in many studies can be dominated by the
+  relatively uniform tropical signal (large equatorial area, small RMSE).
+  Cosine-latitude weighting gives more weight to higher-latitude regions where
+  RMSE is larger. Without this weighting:
+  - Tropical improvements would dominate the global signal
+  - Polar improvements would be underrepresented (small area despite high error)
+  Our analysis uses cosine weighting to give a physically meaningful average
+  within each band, reflecting the atmospheric significance of errors.
+
+5.4  Separation of FCNv2 errors by latitude:
+
+  Structural errors (model cannot represent the physics):
+  - Convective parameterisation: tropical tropics cannot be corrected
+    by extratropical insertions
+  - Boundary layer representation: affects wind10m everywhere
+
+  Initialisation errors (poor IC, correctable by insertion):
+  - Midlatitude baroclinic systems: correctable via Z500, T500, or wind insertion
+  - Rossby wave trains: correctable via Z500 insertion at source region
+
+  Accumulation errors (compound over time):
+  - These appear as systematic RMSE growth in the mature phase
+  - Latitude-specific trends in RMSE growth rate indicate where the model's
+    internal dynamics diverge most rapidly from ERA5
+
+
+────────────────────────────────────────────────────────────────────────────────
+6.  FIGURE-BY-FIGURE PHYSICAL INTERPRETATION
+────────────────────────────────────────────────────────────────────────────────
+
+Figure 5.35 — Setup:
+  Shows the three dynamical regimes used throughout Section 5.7. The broad bands
+  (Tropics, Midlatitudes, Polar) capture three distinct physical regimes with
+  different dominant dynamics. The slice centres (2°, 14°, 40°, 60°) represent
+  key dynamical features: ITCZ region, Hadley cell edge, storm-track centre,
+  and polar front jet region.
+
+Figure 5.36 — T-insertion, U500 & Z500 by lat band:
+  This figure tests whether temperature correction can propagate to momentum
+  (U500) and mass (Z500) fields across different regimes.
+  Expected: Strong midlatitude U500 improvement (thermal-wind), weaker tropical
+  improvement (thermal-wind breaks down near equator).
+  If U500 improvement is comparable across bands → FCNv2 treats thermal-wind
+  as globally uniform (architectural limitation).
+
+Figure 5.37 — Wind-insertion, T500 & Z500 by lat band:
+  Tests whether momentum correction propagates to temperature and mass fields.
+  Midlatitude T500 correction via temperature advection is expected.
+  Tropical T500 should be insensitive to wind correction.
+  Z500 correction via geostrophic coupling should be strongest in midlatitudes.
+
+Figure 5.38 — Z-insertion, T500 & Wind500 by lat band:
+  Tests the "master variable" hypothesis. If Z500 truly encodes both thermal
+  and dynamical information, T500 and Wind500 improvements should be visible
+  in ALL latitude bands.
+  The tropical AFNO limitation would appear as weaker coupling in tropics
+  despite Z500 being corrected.
+
+Figure 5.39 — Band summary bar chart:
+  The key comparison figure. Positive bars confirm each insertion type's
+  effectiveness in each dynamical regime.
+  Important diagnostics to look for:
+  1. Are midlatitude bars consistently taller than tropical bars?
+     → Yes = FCNv2 uses geostrophic dynamics preferentially (physically correct)
+     → No  = AFNO's spectral homogeneity creates latitude-independent errors
+  2. Is Z-insertion the tallest bar in every band/variable combination?
+     → Yes = Z500 is the master correction variable across all regimes
+     → No  = Specific variables are more important in some dynamical regimes
+  3. Is early-phase improvement larger than mature-phase improvement?
+     → Yes = Insertions provide IC correction that decays with lead time (expected)
+     → No  = Insertions correct a systematic model bias that persists
+
+
+────────────────────────────────────────────────────────────────────────────────
+7.  DYNAMICAL REGIME INTERPRETATION OF BAR CHART (Figure 5.39)
+────────────────────────────────────────────────────────────────────────────────
+
+7.1  Tropical insertion effectiveness:
+  The tropics are dominated by convective organisation and moisture dynamics.
+  None of the three insertion types (T500, wind500, Z500) directly corrects
+  the convective parameterisation limitation of FCNv2. Therefore, even with
+  perfect 500 hPa fields, tropical near-surface wind and precipitation errors
+  will persist. This should show up as systematically smaller tropical bars
+  in Figure 5.39 for wind10m, even if 500 hPa metrics improve.
+
+7.2  Midlatitude insertion effectiveness:
+  Midlatitudes are where all three insertion types should show the largest
+  absolute improvement because:
+  - Baroclinic instability is the main error source
+  - Thermal-wind, geostrophic balance, and hypsometric relationships all hold
+  - The AFNO model is best trained for this regime (densest ERA5 observations)
+  Expected pattern: Z-ins > T-ins ≈ Wind-ins for Z500; Z-ins ≈ T-ins > Wind-ins
+  for T500.
+
+7.3  Polar insertion effectiveness:
+  The polar region presents an interesting case. If FCNv2's polar dynamics are
+  poorly constrained (due to sparse training data), insertions may show:
+  - Larger absolute RMSE reduction (model was far from truth)
+  - But also larger spread between runs (less stable corrections)
+  Physically, correct polar Z500 is critical for representing the Arctic
+  Oscillation (AO) and its teleconnection to midlatitude weather.
+  If Z-insertion shows disproportionately large polar improvement, it confirms
+  that FCNv2's polar error is primarily a geopotential height error driven by
+  incorrect stratospheric-tropospheric coupling.
+
+
+────────────────────────────────────────────────────────────────────────────────
+8.  COMPARISON WITH CLASSICAL NWP EXPECTATION
+────────────────────────────────────────────────────────────────────────────────
+
+In classical NWP, latitude-dependent predictability is well-understood:
+  - Tropics: ~1–2 weeks (convective limit)
+  - Midlatitudes NH: ~10–14 days (baroclinic limit)
+  - Midlatitudes SH: ~12–16 days (fewer observational errors in ERA5 IC)
+  - Polar: ~2–3 weeks (slower dynamics, longer intrinsic timescales)
+
+FCNv2's latitude-dependent error growth in the control run should roughly
+match these classical expectations. Deviations from the classical picture
+indicate where FCNv2 either outperforms NWP (likely in tropical wave
+propagation which benefits from global spatial correlations learned by AFNO)
+or underperforms (likely in tropical convection and polar stratospheric coupling).
+
+The insertion experiments test whether these limitations are in the IC
+(correctable) or in the model dynamics (not correctable by IC perturbations).
+The latitude-band analysis allows us to identify which dynamical regime
+drives the overall FCNv2 prediction error and where data assimilation efforts
+(via insertion) are most effective.
+
+
+================================================================================
+END OF SECTION 5.7 THEORETICAL ANALYSIS
+================================================================================

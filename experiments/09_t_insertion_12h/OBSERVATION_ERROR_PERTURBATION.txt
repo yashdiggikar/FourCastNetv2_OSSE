@@ -1,0 +1,213 @@
+================================================================================
+OBSERVATION-ERROR PERTURBATION MODEL — T_PERTURBED OSSE EXPERIMENTS
+================================================================================
+Applied to: FCNv2 (t_perturbed), Aurora (T_PERTURBED), Prithvi (perturbed_temp_ins)
+Written by: Claude Sonnet 4.6  |  Date: 2026-06-11
+References: Ingleby (2017), Errico et al. (2013), Dee et al. (2011)
+================================================================================
+
+
+1. MOTIVATION
+─────────────
+In a perfect-data OSSE, the "truth" field (ERA5 or MERRA-2) is inserted directly
+into the model state with zero error. Real observations, however, are never
+perfect: radiosondes, satellite retrievals, and reanalysis products all carry
+measurement uncertainties that corrupt the true atmospheric state. To simulate
+the impact of these imperfections on the forecast, we perturb the truth
+temperature before insertion. This experiment is labelled "T_PERTURBED" and
+directly contrasts with the perfect-insertion runs (T_LAND, T_OCEAN, etc.) to
+quantify robustness of the insertion signal to observation error.
+
+
+2. MATHEMATICAL FORMULATION
+────────────────────────────
+
+2.1 General form
+────────────────
+At each injection step n (n ≥ start_inject_step), at every grid point (i, j)
+and pressure level l, the perturbed truth temperature T̃ inserted into the
+model is:
+
+    T̃(i, j, l, n)  =  T_truth(i, j, l, n)  +  ε(i, j, l, n)
+
+where:
+    T_truth  = ERA5 / MERRA-2 reanalysis temperature  [K]
+    ε        = observation-error perturbation          [K]
+
+
+2.2 Error distribution
+───────────────────────
+The perturbation ε is drawn from a zero-mean Gaussian (normal) distribution:
+
+    ε(i, j, l, n)  ~  N( 0,  σ_l² )
+
+    ε ~ N(μ, σ²)  with  μ = 0  (unbiased errors — no systematic bias assumed)
+
+This is the standard assumption in NWP data assimilation and OSSE design
+(Errico et al. 2013; Atlas 1997). An unbiased error model reflects the fact
+that modern reanalysis products are bias-corrected before assimilation; any
+residual systematic bias is a separate research question not addressed here.
+
+
+2.3 Spatial and temporal correlation structure
+───────────────────────────────────────────────
+The errors are spatially UNCORRELATED:
+
+    Cov[ ε(i₁,j₁,l,n),  ε(i₂,j₂,l,n) ]  =  σ_l²  if (i₁,j₁)=(i₂,j₂)
+                                           =  0     otherwise
+
+This is the "observation error" (R-matrix) assumption used in most operational
+3D-Var / 4D-Var systems, where off-diagonal elements of the observation error
+covariance R are set to zero (diagonal R approximation). While real radiosonde
+errors do have small vertical correlations within a single sounding, the
+dominant structure is uncorrelated across horizontal grid points.
+
+Errors are also TEMPORALLY INDEPENDENT across injection steps:
+
+    Cov[ ε(i,j,l,n₁),  ε(i,j,l,n₂) ]  =  0     if n₁ ≠ n₂
+
+This is appropriate because successive observation batches carry independent
+instrument noise.
+
+IMPORTANT: The random seed is set deterministically per step (seed = step_index)
+so that results are fully reproducible across reruns. This is standard practice
+in OSSE sensitivity studies.
+
+
+2.4 Level-dependent standard deviations σ_l
+─────────────────────────────────────────────
+The key parameter is σ_l — the standard deviation of observation error at each
+pressure level l. The values used here are based on:
+
+  (a) Ingleby (2017) "Assessment of different radiosonde types 2015/2016"
+      ECMWF Technical Memorandum 807 — direct measurement of radiosonde
+      temperature uncertainty as a function of pressure level.
+
+  (b) Dee et al. (2011) — ERA-Interim observation error specifications used
+      in ECMWF 4D-Var assimilation.
+
+  (c) WMO (2018) CIMO Guide — instrument uncertainty specifications for
+      operational radiosondes.
+
+
+  ┌──────────────┬──────────────────────────────────────────────────────────┐
+  │ Pressure (hPa│  σ_T (K)  │  Physical reasoning                         │
+  ├──────────────┼───────────┼─────────────────────────────────────────────┤
+  │  50          │  2.0      │  Stratosphere: solar heating of sensor causes│
+  │              │           │  large daytime bias; corrections imperfect   │
+  │  100         │  1.5      │  Lower stratosphere: similar solar heating   │
+  │  150         │  1.5      │  effects; cold point tropopause variability  │
+  │  200         │  1.2      │  Tropopause region: moist/dry air mixing,    │
+  │              │           │  radiosonde icing possible                  │
+  │  250         │  1.0      │  Upper troposphere: radiation error reducing │
+  │  300         │  0.8      │  Upper troposphere: reasonably accurate      │
+  │  400         │  0.7      │  Free troposphere MINIMUM — best retrieval   │
+  │  500         │  0.7      │  quality; sensor in thermal equilibrium      │
+  │  600         │  0.8      │  Middle troposphere: small increase due to   │
+  │  700         │  0.8      │  relative humidity effects on sensor         │
+  │  850         │  1.0      │  Lower troposphere / boundary layer: mixing, │
+  │  925         │  1.0      │  surface flux variability, representativeness│
+  │ 1000         │  1.2      │  Near-surface: terrain height, surface       │
+  │              │           │  heterogeneity, sensor exposure issues       │
+  └──────────────┴───────────┴─────────────────────────────────────────────┘
+
+  For Prithvi (MERRA-2 native levels 34–72, 14 levels after ascending flip):
+  The same profile is mapped approximately to native model levels. Surface
+  variables T2M and TS use σ = 1.2 K (WMO 2m temperature sensor uncertainty).
+
+
+2.5 Probability density function
+──────────────────────────────────
+For a given level l and grid point (i,j), the inserted temperature is a
+Gaussian random variable with:
+
+    T̃(i,j,l)  ~  N( T_truth(i,j,l),  σ_l² )
+
+    PDF:  f(T̃) = 1/(σ_l √(2π))  ·  exp[ -(T̃ - T_truth)² / (2σ_l²) ]
+
+The ensemble of perturbed insertions across many grid points at a given level
+thus has the same mean as truth (unbiased) but a spread of ±σ_l K.
+
+
+3. IMPLEMENTATION DETAILS
+──────────────────────────
+
+3.1 Where the noise is added
+─────────────────────────────
+Noise is added in PHYSICAL SPACE (Kelvin), before any normalisation step.
+This is critical: adding noise in normalised (non-dimensional) space would
+produce physically inconsistent error magnitudes.
+
+  For FCNv2:
+    t_np_perturbed = t_np + noise             # physical Kelvin
+    normalized_t   = (t_np_perturbed - μ) / σ  # then normalise
+    x[:,-1,47:60]  = normalized_t             # insert into model state
+
+  For Aurora:
+    perturbed_np = truth_np + noise           # physical Kelvin
+    truth_t      = torch.from_numpy(perturbed_np)  # direct assignment
+
+  For Prithvi:
+    t2m_pert = t2m_truth + noise_sfc          # physical Kelvin
+    T_pert   = T_asc + noise_vert             # physical Kelvin
+    out_inj[...] = torch.from_numpy(T_pert)   # direct insertion
+
+3.2 Random number generation
+─────────────────────────────
+Python/NumPy PCG64 generator (np.random.default_rng) with seed = step index:
+
+    rng   = np.random.default_rng(seed=step)
+    noise = rng.normal(0.0, sigma_l, size=(n_lat, n_lon))
+
+Using a step-specific seed ensures:
+  (a) Reproducibility: any rerun produces identical results
+  (b) Independence across steps: different seeds prevent correlated noise
+  (c) Independence across levels within a step: separate draws per level
+
+
+4. WHAT THIS EXPERIMENT TESTS
+───────────────────────────────
+By comparing T_PERTURBED against the ideal/perfect insertion (e.g. a global
+T insertion with no noise), one can:
+
+  (i)  Quantify ROBUSTNESS: How much RMSE degradation does observation error
+       introduce relative to perfect insertion?
+
+  (ii) Separate SIGNAL from NOISE: Does the beneficial insertion signal survive
+       even when truth contains ~1 K errors?
+
+  (iii) Motivate OPTIMAL INTERPOLATION design: If RMSE with perturbed insertion
+        ≈ RMSE with perfect insertion, observation quality requirements can be
+        relaxed. If RMSE degrades significantly, tighter QC thresholds are needed.
+
+  (iv) Provide a REALISTIC UPPER BOUND: Perturbed insertion represents a more
+       realistic scenario than perfect insertion, and its forecast impact
+       constitutes an achievable (not idealised) benefit.
+
+
+5. REFERENCES
+──────────────
+Errico, R. M., et al. (2013). Development and validation of observing-system
+  simulation experiments at NASA's Global Modeling and Assimilation Office.
+  Quarterly Journal of the Royal Meteorological Society, 139(674), 1162–1178.
+  https://doi.org/10.1002/qj.2027
+
+Ingleby, N. B. (2017). Assessment of different radiosonde types 2015/2016.
+  ECMWF Technical Memorandum 807. European Centre for Medium-Range Weather
+  Forecasts, Reading, UK.
+  https://www.ecmwf.int/sites/default/files/elibrary/2017/17551-...pdf
+
+Dee, D. P., et al. (2011). The ERA-Interim reanalysis: configuration and
+  performance of the data assimilation system. Quarterly Journal of the Royal
+  Meteorological Society, 137(656), 553–597. https://doi.org/10.1002/qj.828
+
+Atlas, R. (1997). Atmospheric observations and experiments to assess their
+  usefulness in data assimilation. Journal of the Meteorological Society of
+  Japan, 75(1B), 111–130.
+
+WMO (2018). Guide to Meteorological Instruments and Methods of Observation
+  (CIMO Guide). WMO-No. 8. World Meteorological Organization, Geneva.
+
+================================================================================
+END OF DOCUMENT
+================================================================================

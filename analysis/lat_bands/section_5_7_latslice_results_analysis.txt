@@ -1,0 +1,347 @@
+================================================================================
+SECTION 5.7 — LATITUDE-SLICE RMSE ANALYSIS: RESULTS AND PHYSICAL INTERPRETATION
+FourCastNetv2  |  IC: 2023-02-01  |  Mature phase: day 30–60
+4 slices: 2°N, 14°N, 40°N, 60°N  (each ±5°, NH only)
+================================================================================
+
+Written: 2026-06-01
+All values below from: lat_bands/values/FCN_latslice_pct_improvement_summary.csv
+Positive % = RMSE reduction (improvement) vs control run.
+
+
+────────────────────────────────────────────────────────────────────────────────
+1.  CONTROL RUN RMSE BY LATITUDE SLICE (REFERENCE BASELINE)
+────────────────────────────────────────────────────────────────────────────────
+
+The control run (no insertion) RMSE in the mature phase increases strongly
+with latitude for all variables. This is the baseline against which all
+insertion improvements are measured.
+
+Z500 control RMSE (m²/s²):
+  2°N  :   145.3    ← small-amplitude tropical troposphere
+  14°N :   243.9    ← subtropical jet variability
+  40°N : 1,358.5    ← storm-track baroclinic systems (9× larger than 2°N)
+  60°N : 2,196.6    ← subpolar vortex + high-amplitude ridges/troughs
+
+T500 control RMSE (K):
+  2°N  :  1.07 K
+  14°N :  2.04 K
+  40°N :  5.79 K
+  60°N :  7.94 K
+
+U500 control RMSE (m/s):
+  2°N  :  6.98    14°N : 9.20    40°N : 14.78    60°N : 15.49
+
+Wind500 control RMSE (m/s):
+  2°N  :  4.42    14°N : 5.79    40°N : 12.55    60°N : 12.49
+
+Wind10 control RMSE (m/s):
+  2°N  :  2.30    14°N : 2.70    40°N :  3.92    60°N :  3.63
+
+Physical interpretation: The rapid increase in RMSE from 2°N to 40°N reflects
+the dominance of baroclinic instability in extratropics — synoptic systems at
+40°N have geopotential amplitudes of 500–1000 m (= 5000–10000 m²/s²), far
+larger than tropical perturbations. The FCNv2 control run loses predictive
+skill for these high-amplitude systems beyond ~2 weeks.
+
+
+────────────────────────────────────────────────────────────────────────────────
+2.  TEMPERATURE INSERTION (T-INS) — RESULTS BY SLICE
+────────────────────────────────────────────────────────────────────────────────
+
+T-insertion forces T500 = ERA5 truth at every step from day 30 onward.
+T500 RMSE drops to exactly 0% at all slices (trivially, by construction).
+Below are downstream effects on other variables.
+
+2.1  U500 improvement:
+  2°N  :  6.0%     ← near-zero — thermal wind breaks down at equator
+  14°N : 34.5%     ← PEAK — subtropical jet is thermally driven
+  40°N : 22.9%     ← lower than 14°N despite stronger baroclinicity
+  60°N : 26.2%
+
+  KEY FINDING: T-insertion improves U500 most at 14°N (subtropical jet),
+  NOT at 40°N (storm-track). This is physically surprising. In classical QG
+  theory, thermal wind coupling is ∂u/∂p = -(R/fp) ∂T/∂y. At 14°N, the
+  Coriolis parameter f is smaller than at 40°N, which would normally WEAKEN
+  thermal-wind coupling. The observed strong response at 14°N suggests FCNv2
+  represents the subtropical jet as primarily thermally driven (consistent with
+  its role as the upper-level expression of the Hadley circulation), while the
+  40°N jet is more eddy-driven (less sensitive to T500 alone).
+
+2.2  Z500 improvement:
+  2°N  : 18.6%     ← weak — tropical Z500 not strongly linked to T500 gradient
+  14°N : 37.9%
+  40°N : 39.8%     ← PEAK — midlatitude hypsometric coupling strongest
+  60°N : 36.8%
+
+  Z500 improvement is roughly uniform (37–40%) from 14°N to 60°N, with a clear
+  drop at 2°N (18.6%). This is consistent with hypsometric balance
+  (ΔZ = (R/g)ΔT·ln(p₁/p₂)) which holds in the geostrophic regime (14°N–60°N)
+  but breaks down near the equator.
+
+2.3  Wind500 improvement — NOTABLE NEGATIVE VALUE:
+  2°N  : -3.0%     ← T-INSERTION WORSENS WIND500 AT 2°N
+  14°N : 19.4%
+  40°N : 21.3%
+  60°N : 18.0%
+
+  The -3.0% at 2°N is the most physically significant result of this analysis.
+  Inserting corrected T500 at the equator creates a temperature field that is
+  inconsistent with the FCNv2 wind field (which was balanced to the wrong T500).
+  This imbalance generates ageostrophic circulations (gravity wave responses)
+  that temporarily increase wind500 RMSE — classic "analysis shock."
+  At higher latitudes (≥14°N) where f > 0, geostrophic adjustment is rapid
+  and the model recovers; at the equator, the adjustment timescale diverges
+  (f→0) and the imbalance persists through the mature phase.
+
+2.4  Wind10 improvement — REVERSED LATITUDE GRADIENT:
+  2°N  : 22.6%     ← PEAK — opposite pattern to all other variables
+  14°N : 21.8%
+  40°N :  7.6%     ← weak
+  60°N :  5.5%     ← weakest
+
+  T-insertion improves near-surface winds most in the tropics.
+  Physical mechanism: tropical surface trade winds are thermally driven via the
+  Hadley circulation. Correcting T500 modifies the upper-level thermal gradient
+  that drives the tropical meridional overturning, which in turn adjusts the
+  surface easterlies. In midlatitudes, surface winds are controlled by boundary
+  layer processes and extratropical cyclone dynamics, not by 500 hPa temperature.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3.  WIND INSERTION (WIND-INS) — RESULTS BY SLICE
+────────────────────────────────────────────────────────────────────────────────
+
+Wind-insertion forces U500 = V500 = ERA5 truth at every step from day 30.
+U500 and Wind500 RMSE → 0% trivially. Downstream effects:
+
+3.1  T500 improvement:
+  2°N  : 32.5%
+  14°N : 57.0%
+  40°N : 71.2%     ← PEAK — strong thermal advection in storm tracks
+  60°N : 61.0%
+
+  Clear latitude gradient: tropical T500 is less responsive to wind correction
+  (32.5%) than midlatitude T500 (71.2%). This confirms the direction of the
+  dominant coupling in FCNv2: in midlatitudes, temperature is advected by winds
+  (∂T/∂t ≈ -u·∇T), so correct winds immediately improve T500. In the tropics,
+  temperature anomalies are driven by convection and radiative processes,
+  making them less sensitive to horizontal wind correction.
+
+3.2  Z500 improvement:
+  2°N  : 33.5%
+  14°N : 53.7%
+  40°N : 84.8%     ← PEAK — storm-track baroclinic instability corrected
+  60°N : 72.8%
+
+  The 84.8% improvement at 40°N is the single largest downstream improvement
+  across all experiments and all slices. Wind-insertion at the storm-track
+  centre (40°N) corrects the geopotential height field by 85%, meaning the
+  large-scale circulation pattern at 40°N is almost entirely determined by
+  the correctness of the wind field. This confirms that FCNv2's Z500 errors
+  at 40°N are primarily caused by incorrect wind shear (baroclinic errors),
+  not by errors in mass distribution (direct Z500 bias).
+
+3.3  Wind10 improvement:
+  2°N  : 45.5%
+  14°N : 53.7%
+  40°N : 62.0%
+  60°N : 61.0%
+
+  Wind-insertion propagates efficiently to near-surface winds at all latitudes,
+  with a modest increase from tropics to midlatitudes. This suggests the FCNv2
+  model has learned a strong vertical coupling between 500 hPa winds and 10m
+  winds, consistent with the barotropic component of midlatitude flow.
+
+
+────────────────────────────────────────────────────────────────────────────────
+4.  GEOPOTENTIAL INSERTION (Z-INS) — RESULTS BY SLICE
+────────────────────────────────────────────────────────────────────────────────
+
+Z-insertion forces Z500 = ERA5 truth at every step from day 30.
+Z500 RMSE → 0% trivially. Downstream effects:
+
+4.1  T500 improvement — STRONGEST LATITUDE GRADIENT OF ALL EXPERIMENTS:
+  2°N  : 16.1%     ← weakest
+  14°N : 46.8%
+  40°N : 80.8%
+  60°N : 83.5%     ← PEAK
+
+  The range 16% → 84% across slices is the largest latitude gradient
+  observed in any experiment. This directly quantifies the breakdown of the
+  hypsometric relationship Z500 → T̄_layer as latitude decreases.
+
+  At 40°N and 60°N, inserting correct Z500 fixes ~82% of T500 error — Z500
+  almost completely encodes the layer-mean temperature through hypsometric
+  balance: T̄ = (g/R) · ΔZ / ln(p₁/p₂).
+
+  At 2°N, only 16% of T500 error is fixed by correct Z500 — the tropical
+  temperature structure is dominated by moist convection and latent heating,
+  processes that operate independently of the geopotential height field.
+  In the tropics, Z500 is nearly constant (weak horizontal gradients), so it
+  contains little information about temperature anomalies.
+
+4.2  U500 improvement:
+  2°N  : 35.4%
+  14°N : 58.3%
+  40°N : 70.7%
+  60°N : 69.5%
+
+  Geostrophic wind: u_g = -(g/f)·∂Z/∂y. At 2°N, f → 0 so even perfect Z500
+  cannot recover geostrophic winds (the geostrophic relation diverges).
+  Despite this, Z-insertion still achieves 35.4% at 2°N — this residual
+  improvement likely comes from ageostrophic components (gradient wind
+  balance) that FCNv2 has learned empirically from training data.
+
+4.3  Wind500 improvement:
+  2°N  : 20.9%
+  14°N : 41.6%
+  40°N : 66.6%
+  60°N : 64.4%
+
+4.4  Wind10 improvement:
+  2°N  : 37.5%
+  14°N : 47.0%
+  40°N : 54.4%
+  60°N : 54.5%
+
+
+────────────────────────────────────────────────────────────────────────────────
+5.  CROSS-EXPERIMENT COMPARISON BY SLICE
+────────────────────────────────────────────────────────────────────────────────
+
+5.1  At 2°N (deep tropics, −3° to 7°):
+
+  Variable  | T-ins | Wind-ins | Z-ins | Best experiment
+  ──────────┼───────┼──────────┼───────┼─────────────────
+  U500      |  6.0% |  [~100%] | 35.4% | Wind-ins (trivial)
+  Z500      | 18.6% |   33.5%  | [100%]| Z-ins (trivial)
+  Wind500   | -3.0% |  [~100%] | 20.9% | Wind-ins (trivial)
+  Wind10    | 22.6% |   45.5%  | 37.5% | Wind-ins
+
+  In the deep tropics, T-insertion is the weakest non-trivial correction.
+  The negative Wind500 (-3.0%) from T-insertion (analysis shock) is unique
+  to this slice — it does not appear at any other latitude.
+  Wind-insertion and Z-insertion both help Wind10 substantially (46–38%).
+
+5.2  At 14°N (subtropics, 9° to 19°):
+
+  Variable  | T-ins | Wind-ins | Z-ins | Best non-trivial
+  ──────────┼───────┼──────────┼───────┼─────────────────
+  U500      | 34.5% |  [~100%] | 58.3% | Z-ins
+  Z500      | 37.9% |   53.7%  | [100%]| Wind-ins (non-trivial)
+  Wind500   | 19.4% |  [~100%] | 41.6% | Z-ins
+  Wind10    | 21.8% |   53.7%  | 47.0% | Wind-ins
+
+  14°N is where T-insertion becomes effective for U500 (34.5%) — subtropical
+  jet is thermally driven. Z-insertion shows the largest non-trivial U500 and
+  Wind500 improvement at this slice.
+
+5.3  At 40°N (midlatitude storm track, 35° to 45°):
+
+  Variable  | T-ins | Wind-ins | Z-ins | Best non-trivial
+  ──────────┼───────┼──────────┼───────┼─────────────────
+  U500      | 22.9% |  [~100%] | 70.7% | Z-ins
+  Z500      | 39.8% |   84.8%  | [100%]| Wind-ins (84.8% is the highest
+  Wind500   | 21.3% |  [~100%] | 66.6% |   non-trivial value in entire dataset)
+  Wind10    |  7.6% |   62.0%  | 54.4% | Wind-ins
+
+  40°N is the critical slice. Wind-insertion achieves 84.8% Z500 improvement —
+  the highest non-trivial improvement across all experiments and slices.
+  T-insertion's Wind10 effect collapses to 7.6% (vs 22.6% at 2°N).
+  Z-insertion's T500 improvement reaches 80.8%.
+
+5.4  At 60°N (subpolar, 55° to 65°):
+
+  Variable  | T-ins | Wind-ins | Z-ins | Best non-trivial
+  ──────────┼───────┼──────────┼───────┼─────────────────
+  U500      | 26.2% |  [~100%] | 69.5% | Z-ins
+  Z500      | 36.8% |   72.8%  | [100%]| Wind-ins
+  Wind500   | 18.0% |  [~100%] | 64.4% | Z-ins
+  Wind10    |  5.5% |   61.0%  | 54.5% | Wind-ins
+
+  60°N results are broadly similar to 40°N, consistent with the extratropical
+  regime extending from ~30°N to 90°N in FCNv2's learned dynamics.
+  Z-insertion T500 improvement peaks here at 83.5% — the highest across all
+  slices for any experiment on T500.
+
+
+────────────────────────────────────────────────────────────────────────────────
+6.  KEY SCIENTIFIC FINDINGS
+────────────────────────────────────────────────────────────────────────────────
+
+Finding 1 — Analysis Shock at the Equator:
+  T-insertion WORSENS Wind500 at 2°N by 3.0%. This is the clearest evidence
+  of analysis shock in the FCNv2 system. The model cannot maintain thermal-wind
+  balance near the equator, so inserting correct T500 into a wind field
+  balanced to wrong T500 creates ageostrophic disturbances. This is not seen at
+  any other slice or in any other experiment.
+
+Finding 2 — Z500 is the Master Variable in the Extratropics:
+  Z-insertion achieves T500 improvements of 80–84% at 40°N and 60°N, and U500
+  improvements of 70–71% at the same latitudes. Z500 encodes almost all the
+  information needed to reconstruct the extratropical thermal and wind structure
+  through hypsometric balance and geostrophic balance respectively.
+  In the deep tropics this breaks down completely (T500 only 16% from Z-ins).
+
+Finding 3 — FCNv2's Dominant Coupling Direction is Wind → Temperature at Midlatitudes:
+  Wind-insertion achieves higher non-trivial T500 improvements than T-insertion
+  achieves U500 improvements at 40°N (71.2% vs 22.9%). This asymmetry shows
+  FCNv2 is more capable of learning the wind → T500 pathway (temperature
+  advection) than the T500 → wind pathway (thermal wind balance inversion).
+
+Finding 4 — The Subtropical Jet is Thermally Driven in FCNv2:
+  T-insertion peaks at 14°N for U500 (34.5%), exceeding the midlatitude
+  response (40°N: 22.9%). FCNv2 has learned that subtropical upper-level
+  winds are determined by the meridional temperature gradient (Hadley cell
+  thermal forcing), consistent with the thermally-direct nature of the
+  subtropical jet.
+
+Finding 5 — T-insertion Improves Tropical Surface Winds (Hadley Circulation):
+  T-insertion Wind10 improvement is highest at 2°N (22.6%) and 14°N (21.8%),
+  and lowest at 40°N (7.6%) and 60°N (5.5%). This reveals that FCNv2 has
+  learned the Hadley circulation pathway: upper-level tropical temperature
+  anomalies drive meridional overturning that affects the surface trade winds.
+  This coupling does not operate in the midlatitudes.
+
+Finding 6 — Wind-insertion Z500 Peaks at the Storm Track (40°N):
+  84.8% Z500 improvement at 40°N is the single largest downstream improvement
+  in the entire analysis. It directly identifies baroclinic instability in
+  the storm-track region as the primary source of FCNv2 forecast error: the
+  model cannot sustain correct circulation patterns at 40°N because it cannot
+  correctly simulate baroclinic growth, but given correct winds as input,
+  it largely recovers the large-scale geopotential structure.
+
+
+────────────────────────────────────────────────────────────────────────────────
+7.  COMPARISON WITH BROAD-BAND RESULTS (lats/ directory)
+────────────────────────────────────────────────────────────────────────────────
+
+The broad-band analysis (Tropics/Midlatitudes/Polar) averages over wide ranges
+and obscures the within-band variation revealed here. Key differences:
+
+  Broad Tropics vs 2°N vs 14°N:
+    - Broad Tropics = (|lat|<30°) mixes the 2°N deep tropics signal with the
+      14°N subtropical signal. The -3.0% Wind500 analysis shock at 2°N is
+      completely hidden in the Broad Tropics average.
+    - Z-ins T500 improvement: Broad Tropics = 56.2%, but 2°N = 16.1% and
+      14°N = 46.8%. The subtropical average pulls the tropical mean up
+      significantly, masking the near-zero response at the equator.
+
+  Broad Midlatitudes vs 40°N:
+    - Broad Midlatitudes averages 30°–60°N both hemispheres. The 40°N storm
+      track signature is diluted. Wind-ins Z500 = 83.2% (broad) vs 84.8% (40°N)
+      — very close because 40°N is the dominant contributor.
+
+  Broad Polar vs 60°N:
+    - The 60°N slice covers 55°–65°, near the edge of the Polar band (>60°).
+      Results are broadly similar between Polar band and 60°N slice.
+
+Recommendation for thesis: use the slice analysis to discuss specific dynamical
+mechanisms (storm track, subtropical jet, equatorial dynamics) and the broad-band
+analysis for the overall summary bar chart.
+
+
+================================================================================
+END OF SECTION 5.7 LAT-SLICE RESULTS ANALYSIS
+================================================================================

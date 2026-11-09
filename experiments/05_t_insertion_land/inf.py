@@ -1,0 +1,123 @@
+import datetime
+import h5py
+import numpy as np
+import torch
+import xarray as xr
+import netCDF4 as nc4
+from cftime import date2num
+from pathlib import Path
+
+from earth2mip.networks.fcnv2_sm import load as fcnv2_sm_load
+from earth2mip.initial_conditions import cds
+
+# ── Config ────────────────────────────────────────────────────────────────────
+device      = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.cuda.is_available():
+    props = torch.cuda.get_device_properties(0)
+    print(f"GPU: {props.name}, VRAM: {props.total_memory/1e9:.1f} GB")
+start_time  = datetime.datetime(2023, 2, 1)
+num_steps   = 240   # 60 days at 6 h/step; injection active steps 120–239 (day 30–60)
+output_file = "/umbc/rs/pi_halem/users/yashd1/fcn_inference/forecast_t_landonly_day30_60.nc"
+
+WEIGHTS_DIR = Path("/umbc/rs/pi_halem/users/yashd1/fcn_inference/fcnv2_sm")
+ERA5_DIR    = Path("/umbc/rs/pi_halem/users/yashd1/AURORA_DATA/rmse_data")
+LSM_PATH    = "/umbc/rs/pi_halem/users/yashd1/FCN3/makani/stat-files/land_mask.nc"
+
+# ── Land-sea mask (FCN3 stat file, HDF5-compatible NetCDF) ────────────────────
+print("📂 Loading land-sea mask...")
+with h5py.File(LSM_PATH, "r") as f:
+    lsm = f["LSM"][0].astype(np.float32)  # (lat, lon), values 0–1
+
+# FCNv2 uses 721×1440 (includes south pole); FCN3 mask may be 720×1440
+if lsm.shape[0] == 720:
+    lsm = np.concatenate([lsm, lsm[-1:, :]], axis=0)  # pad south pole row
+land_bool = lsm > 0.5  # True = land, shape (721, 1440)
+print(f"✅ Land mask: {land_bool.shape}, land points: {land_bool.sum()}")
+
+# ── ERA5 temperature (lazy-loaded from GRIB) ──────────────────────────────────
+print("📂 Opening ERA5 temperature GRIB files...")
+era5_files = [
+    ERA5_DIR / "era5_pressure_2023_02.grib",
+    ERA5_DIR / "era5_pressure_2023_03.grib",
+    ERA5_DIR / "era5_pressure_2023_04.grib",
+]
+era5_datasets = []
+for fpath in era5_files:
+    ds = xr.open_dataset(
+        str(fpath),
+        engine="cfgrib",
+        filter_by_keys={"shortName": "t", "typeOfLevel": "isobaricInhPa"},
+        indexpath=None,
+    )
+    era5_datasets.append(ds)
+
+era5_t_ds = xr.concat(era5_datasets, dim="time").sortby("time")
+print(f"✅ ERA5 T: {dict(era5_t_ds.dims)}, levels: {era5_t_ds.isobaricInhPa.values.tolist()}")
+
+# ── Model ─────────────────────────────────────────────────────────────────────
+print(f"📂 Loading FCNv2-sm onto {device}...")
+package = {
+    "global_means.npy": str(WEIGHTS_DIR / "global_means.npy"),
+    "global_stds.npy":  str(WEIGHTS_DIR / "global_stds.npy"),
+    "weights.tar":      str(WEIGHTS_DIR / "weights.tar"),
+    "config.json":      str(WEIGHTS_DIR / "metadata.json"),
+}
+sfno_model = fcnv2_sm_load(package, device=device)
+sfno_model.truth_ds  = era5_t_ds   # xarray Dataset with 't' variable, 'time' dim
+sfno_model.land_bool = land_bool   # numpy bool array (721, 1440)
+print("✅ Model loaded.")
+
+# ── Initial condition from CDS ────────────────────────────────────────────────
+print("📡 Fetching initial condition from CDS API...")
+data_source = cds.DataSource(sfno_model.in_channel_names)
+x0 = data_source[start_time]
+x0 = torch.from_numpy(x0).float().unsqueeze(0).unsqueeze(0).to(device)
+print(f"✅ IC shape: {x0.shape}")
+
+# ── Create output NetCDF (write each step incrementally — avoids stacking 73 GB) ─
+channel_names = sfno_model.out_channel_names
+lats = sfno_model.grid.lat
+lons = sfno_model.grid.lon
+n_channels = len(channel_names)
+n_lat = len(lats)
+n_lon = len(lons)
+
+print(f"📦 Creating output file: {output_file}")
+ncf = nc4.Dataset(output_file, "w", format="NETCDF4")
+ncf.createDimension("time", None)           # unlimited
+ncf.createDimension("channel", n_channels)
+ncf.createDimension("lat", n_lat)
+ncf.createDimension("lon", n_lon)
+
+tv  = ncf.createVariable("time",    "f8", ("time",))
+tv.units    = "hours since 1900-01-01 00:00:00"
+tv.calendar = "standard"
+
+cv  = ncf.createVariable("channel", str,  ("channel",))
+lv  = ncf.createVariable("lat",     "f4", ("lat",))
+lv.units = "degrees_north"
+lonv = ncf.createVariable("lon",    "f4", ("lon",))
+lonv.units = "degrees_east"
+pv  = ncf.createVariable("prediction", "f4", ("time", "channel", "lat", "lon"),
+                          zlib=True, complevel=4)
+
+lv[:]  = lats
+lonv[:] = lons
+for i, ch in enumerate(channel_names):
+    cv[i] = ch
+
+# ── Inference — write each 6-hour step immediately ────────────────────────────
+print(f"🚀 Running inference for {num_steps} steps ({num_steps//4} days)...")
+
+for step_idx, (step_time, out, _) in enumerate(sfno_model(start_time, x0)):
+    if step_idx >= num_steps:
+        break
+    arr = out.cpu().numpy()[0]          # (channels, lat, lon)
+    t_num = date2num(step_time, units=tv.units, calendar=tv.calendar)
+    tv[step_idx]  = t_num
+    pv[step_idx]  = arr
+    if step_idx % 20 == 0:
+        print(f"  step {step_idx:3d}/{num_steps} | {step_time}")
+
+ncf.close()
+print(f"✅ Saved: {output_file}")

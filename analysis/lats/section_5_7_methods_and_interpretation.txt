@@ -1,0 +1,440 @@
+================================================================================
+SECTION 5.7 — LATITUDE-BAND RMSE ANALYSIS: METHODS, FORMULAS, AND INTERPRETATION
+FourCastNetv2 | IC: 2023-02-01 | Lead day 0–60
+================================================================================
+
+Written: 2026-06-01
+
+
+────────────────────────────────────────────────────────────────────────────────
+1.  DATA SOURCES
+────────────────────────────────────────────────────────────────────────────────
+
+FCN Forecast Files (4 runs, each 120 steps × 12 hr = 60 days):
+
+  control  : forecast_normal_60days_12hr.nc
+  t_ins    : Prediction_Files_Fcn/t_ins/t_ins/forecast_truth_injected_60days_12hr_FINAL.nc
+  wind_ins : Prediction_Files_Fcn/wind/wind_ins/forecast_uv_injected_60days_12hr_FINAL.nc
+  z_ins    : Prediction_Files_Fcn/z_ins/forecast_z_injected_60days_12hr_FINAL.nc
+
+  File structure: HDF5/NetCDF4, dataset "prediction", shape (120, 73, 721, 1440)
+  Channel index → variable (from file's 'channel' dataset):
+    0  → u10m   (10m zonal wind, m/s)
+    1  → v10m   (10m meridional wind, m/s)
+    15 → u500   (500 hPa zonal wind, m/s)
+    28 → v500   (500 hPa meridional wind, m/s)
+    41 → z500   (500 hPa geopotential, m²/s²)
+    54 → t500   (500 hPa temperature, K)
+
+ERA5 Truth Files:
+  Pressure-level GRIB: era5_pressure_2023_{02,03,04}.grib
+  Surface GRIB:        era5_surface_2023_{02,03,04}.grib
+  Location: /umbc/rs/pi_halem/users/yashd1/AURORA_DATA/rmse_data/
+
+  Pressure-level variables used:
+    shortName='t', level=500 → T500 (K)
+    shortName='u', level=500 → U500 (m/s)
+    shortName='v', level=500 → V500 (m/s)
+    shortName='z', level=500 → Z500 (m²/s²)
+
+  Surface variables used:
+    shortName='10u', typeOfLevel='surface' → U10m (m/s)
+    shortName='10v', typeOfLevel='surface' → V10m (m/s)
+
+  ERA5 temporal resolution: 6-hourly
+  FCN temporal resolution: 12-hourly
+  Matching: nearest ERA5 timestamp within 1-hour tolerance for each FCN step
+
+
+────────────────────────────────────────────────────────────────────────────────
+2.  TIME AXIS AND PHASE DEFINITIONS
+────────────────────────────────────────────────────────────────────────────────
+
+FCN initial condition: 2023-02-01 00:00 UTC
+
+Step k (k = 0, 1, …, 119):
+  Valid time  = IC + k × 12 hours
+  Lead day    = k × 0.5 days
+  Lead day range: 0.0, 0.5, 1.0, …, 59.5
+
+Phase definitions:
+  Early phase   : lead day  0 – 29.5  (steps  0–59)
+  Mature phase  : lead day 30 – 59.5  (steps 60–119)
+
+  The early phase is where IC information still dominates. Insertions provide
+  a corrected IC, so improvements are largest here.
+  The mature phase is where model error saturation dominates; improvements here
+  indicate correction of systematic model bias rather than IC error.
+
+
+────────────────────────────────────────────────────────────────────────────────
+3.  LATITUDE BANDS
+────────────────────────────────────────────────────────────────────────────────
+
+Three broad dynamical bands (both hemispheres):
+
+  Tropics       : -30° ≤ lat < 30°
+  Midlatitudes  : -60° ≤ lat < -30°  OR  30° ≤ lat < 60°
+  Polar         : -90° ≤ lat < -60°  OR  60° ≤ lat < 90°
+
+Four latitude slice centres (for Figure 5.35 diagram only):
+  2°N  — deep tropics / ITCZ
+  14°N — subtropics / Hadley cell edge
+  40°N — midlatitude storm track
+  60°N — subpolar / polar front jet
+
+Grid: 721 latitude points × 1440 longitude points
+  lats_1d = linspace(90, -90, 721)  → 0.25° spacing, 90→-90
+  lons_1d = linspace(0, 359.75, 1440)
+
+
+────────────────────────────────────────────────────────────────────────────────
+4.  COSINE-LATITUDE WEIGHTING
+────────────────────────────────────────────────────────────────────────────────
+
+Motivation: The Earth's surface element is dA = R² cos(φ) dφ dλ, where φ is
+latitude and λ is longitude. Grid cells at high latitude cover less physical
+area than equatorial cells at the same angular resolution. Without weighting,
+polar values receive the same weight as tropical values despite representing
+a much smaller area.
+
+Weight array:
+  w(φ) = cos(φ)    where φ is in radians = deg2rad(lat)
+  w_2d[lat_idx, lon_idx] = cos(deg2rad(lats_1d[lat_idx]))
+
+  This 2D weight array has shape (721, 1440).
+
+Normalisation: weights are normalised within each band sum:
+  W_band = Σ_{(i,j) in band} w_2d[i,j]
+
+The band-weighted RMSE at each timestep uses these weights in the squared
+error accumulation (see Section 5 below).
+
+
+────────────────────────────────────────────────────────────────────────────────
+5.  RMSE FORMULA (COSINE-LATITUDE WEIGHTED, WITHIN-BAND)
+────────────────────────────────────────────────────────────────────────────────
+
+At lead step k, for variable v, latitude band B:
+
+  RMSE_B(k) = sqrt(  Σ_{(i,j) ∈ B}  w[i] × [FCN(k,i,j) − ERA5(k,i,j)]²
+                     ─────────────────────────────────────────────────────
+                              Σ_{(i,j) ∈ B}  w[i]
+                   )
+
+  Where:
+    k            = timestep index (0–119)
+    (i,j)        = (lat_index, lon_index)
+    w[i]         = cos(deg2rad(lat[i]))
+    FCN(k,i,j)   = FCN forecast value at step k, gridpoint (i,j)
+    ERA5(k,i,j)  = ERA5 truth value at matching valid time, gridpoint (i,j)
+    ∈ B          = sum only over lat/lon points inside band B
+
+  The result is a scalar in the same units as the variable.
+
+Code implementation:
+  sq   = (fcn_arr - era5_arr) ** 2          # (721, 1440) pointwise squared error
+  w    = cos_w_2d * lat_mask[:, None]        # zero outside band
+  wsum = w.sum()                             # sum of weights in band
+  rmse = sqrt((sq * w).sum() / wsum)         # weighted RMS
+
+
+────────────────────────────────────────────────────────────────────────────────
+6.  DERIVED VARIABLES
+────────────────────────────────────────────────────────────────────────────────
+
+Wind speed at 500 hPa:
+  wind500(k,i,j) = sqrt( U500(k,i,j)² + V500(k,i,j)² )
+
+  Computed for both FCN (channels 15 and 28) and ERA5 (shortName='u','v',
+  level=500) before computing the RMSE. This is wind magnitude in m/s.
+
+Wind speed at 10m:
+  wind10(k,i,j) = sqrt( U10m(k,i,j)² + V10m(k,i,j)² )
+
+  FCN: channels 0 and 1 (u10m, v10m)
+  ERA5: shortName='10u', '10v', typeOfLevel='surface'
+
+  Note on units: FCN u10m/v10m are in m/s; ERA5 10u/10v are in m/s.
+  No unit conversion needed.
+
+  Note: wind RMSE is computed from the derived magnitude, NOT from the u and v
+  components separately. This removes sign ambiguity and measures the
+  physically relevant quantity (total wind error).
+
+
+────────────────────────────────────────────────────────────────────────────────
+7.  PERCENTAGE IMPROVEMENT FORMULA
+────────────────────────────────────────────────────────────────────────────────
+
+For insertion run R, variable v, band B, phase P (initial or mature):
+
+  mean_RMSE_ctrl(v,B,P) = mean over all steps k in phase P of RMSE_B_ctrl(k)
+  mean_RMSE_R(v,B,P)    = mean over all steps k in phase P of RMSE_B_R(k)
+
+  pct_improvement(R,v,B,P) = 100 × [mean_RMSE_ctrl − mean_RMSE_R] / mean_RMSE_ctrl
+
+  Positive → insertion R improves (reduces) RMSE relative to control
+  Negative → insertion R worsens RMSE relative to control
+  Zero     → insertion has no effect
+
+  Note: this uses the time-mean RMSE within the phase, not the phase-endpoint RMSE.
+  This gives a more robust estimate that is not sensitive to RMSE oscillations
+  at any single timestep.
+
+
+────────────────────────────────────────────────────────────────────────────────
+8.  ERA5 TIME MATCHING ALGORITHM
+────────────────────────────────────────────────────────────────────────────────
+
+FCN steps occur at 12-hourly intervals; ERA5 reanalysis is 6-hourly.
+Every FCN valid time has an exact ERA5 match (since 12h is a multiple of 6h).
+
+Algorithm:
+  For each FCN step k with valid time t_k:
+    1. Load ERA5 array (N_time, 721, 1440) for the relevant month
+    2. Compute time differences: δt = |ERA5_times - t_k|
+    3. Find idx = argmin(δt)
+    4. If δt[idx] ≤ 1 hour: accept ERA5[idx, :, :] as truth for step k
+       Else: mark step k as ERA5-unavailable (NaN in RMSE array)
+
+  Since ERA5 files cover full months and FCN valid times land on 00:00 and
+  12:00 UTC, all 120 FCN steps should have an exact ERA5 match (δt = 0).
+
+  Processing order to minimise RAM: load one month at a time, extract
+  matching steps, delete monthly array, move to next month.
+
+
+────────────────────────────────────────────────────────────────────────────────
+9.  OUTPUT FILES
+────────────────────────────────────────────────────────────────────────────────
+
+CSV files saved to: FourCastNet/lats/values/
+
+  Per-run, per-variable time series:
+    FCN_{run}_{var}_latband_rmse.csv
+    Columns: step, lead_day, run, Tropics, Midlatitudes, Polar
+
+    Example rows:
+    step, lead_day, run,      Tropics,  Midlatitudes, Polar
+    0,    0.0,      control,  0.4521,   0.9134,       0.7823
+    1,    0.5,      control,  0.4613,   0.9287,       0.7901
+    ...
+
+    One file per (run, variable) combination = 4 runs × 5 variables = 20 files
+
+  Summary percentage improvement:
+    FCN_latband_pct_improvement_summary.csv
+    Columns: run, variable, band, phase, ctrl_rmse, ins_rmse, pct_improvement
+
+    This is the source for Figure 5.39.
+
+
+────────────────────────────────────────────────────────────────────────────────
+10.  FIGURE-BY-FIGURE EXPLANATION
+────────────────────────────────────────────────────────────────────────────────
+
+─────────────────────────────────
+Figure 5.35 — Latitude Band Setup
+─────────────────────────────────
+Type: Global map (PlateCarree projection, cartopy)
+Purpose: Visual reference for all lat-band analysis in Section 5.7
+
+What it shows:
+  - Three dynamical regime bands shaded in distinct colours:
+      Red    = Tropics (|lat| < 30°)
+      Green  = Midlatitudes (30°–60°, both hemispheres)
+      Blue   = Polar (|lat| > 60°, both hemispheres)
+  - Four latitude slice centres shown as coloured dashed lines in NH
+    (mirrored at half opacity for SH):
+      2°N  — deep tropics
+      14°N — subtropics
+      40°N — midlatitude storm track
+      60°N — subpolar
+
+How to read it:
+  The broad bands are the spatial averaging domains used for all RMSE time
+  series plots (Figs 5.36–5.38) and the bar chart (Fig 5.39). The slice
+  centres are reference points only — they highlight dynamically significant
+  latitudes but are not used in the quantitative analysis.
+
+─────────────────────────────────────────────────────────────────────────────
+Figure 5.36 — T-Insertion Lat-Band RMSE Time Series (U500 and Z500)
+─────────────────────────────────────────────────────────────────────────────
+Type: 2×3 grid of time series plots
+Layout: Rows = variable (U500 top, Z500 bottom)
+        Columns = latitude band (Tropics | Midlatitudes | Polar)
+X-axis: Lead day (0–60)
+Y-axis: Cosine-latitude-weighted RMSE within band [m/s for U500, m²/s² for Z500]
+Lines: 4 coloured lines per panel
+  Black (solid, thick)  = Control run
+  Red   (dashed, thick) = T-insertion (primary focus of this figure)
+  Blue  (dotted, thin)  = Wind-insertion
+  Orange(dotted, thin)  = Z-insertion
+Grey shading: Mature phase (day 30–60)
+Vertical dashed line: day 30 (boundary between phases)
+
+What each panel shows:
+  Panel [0,0] U500 / Tropics:
+    Can temperature correction improve tropical zonal wind? If red (T-ins) line
+    is below black (control), T500 correction helped tropical U500. This tests
+    whether FCNv2's tropical dynamics are temperature-driven.
+
+  Panel [0,1] U500 / Midlatitudes:
+    Key panel. Thermal-wind balance connects ∂u/∂p to ∂T/∂y. If T-ins
+    significantly reduces midlatitude U500 RMSE, FCNv2 correctly uses
+    thermal-wind coupling. Expected to show largest T-ins improvement.
+
+  Panel [0,2] U500 / Polar:
+    Does temperature correction propagate to polar winds? Expect weaker
+    effect than midlatitudes because polar dynamics are more barotropic.
+
+  Panel [1,0], [1,1], [1,2]: Same structure for Z500.
+    Z500 responds to T500 via hypsometric balance:
+    ΔZ₅₀₀ ≈ (R/g) × ΔT_layer_mean × ln(p_low/p_high)
+    Largest Z500 response from T-ins expected in midlatitudes.
+
+─────────────────────────────────────────────────────────────────────────────
+Figure 5.37 — Wind-Insertion Lat-Band RMSE Time Series (T500 and Z500)
+─────────────────────────────────────────────────────────────────────────────
+Same layout as 5.36, but focus run = Wind-insertion (blue, dashed, thick).
+Variables: T500 (row 0), Z500 (row 1).
+
+What it probes:
+  Row 0 (T500): Does wind correction propagate back to temperature?
+    The advection equation: ∂T/∂t ≈ -u·∇T − ω·∂T/∂p + Q/Cp
+    Horizontal temperature advection (-u·∇T) is directly corrected when u is
+    corrected. Expect midlatitude T500 improvement from Wind-ins.
+
+  Row 1 (Z500): Does wind correction improve the mass field?
+    Via geostrophic balance: ∂Z/∂t includes geostrophic advection.
+    Correct winds → correct mass advection → reduced Z500 error.
+
+─────────────────────────────────────────────────────────────────────────────
+Figure 5.38 — Z-Insertion Lat-Band RMSE Time Series (T500 and Wind500)
+─────────────────────────────────────────────────────────────────────────────
+Same layout, focus run = Z-insertion (orange, dashed, thick).
+Variables: T500 (row 0), Wind500 (row 1).
+
+What it probes:
+  Row 0 (T500): Does Z500 correction cascade to temperature?
+    Hypsometric: T̄_layer = (g/R) × ΔZ / ln(p_low/p_high)
+    If Z-ins corrects T500 across all bands → FCNv2 implements hypsometry globally.
+
+  Row 1 (Wind500): Does Z500 correction cascade to winds?
+    Geostrophic: u_g = -(g/f)∂Z/∂y, v_g = (g/f)∂Z/∂x
+    At low latitudes f → 0 so geostrophic wind diverges. Expect WEAKER
+    Wind500 correction from Z-ins in tropics vs midlatitudes.
+
+─────────────────────────────────────────────────────────────────────────────
+Figure 5.39 — Band Summary Bar Chart (Both Phases)
+─────────────────────────────────────────────────────────────────────────────
+Type: 2-row × 5-column grid of bar charts
+Top row: Early phase (day 0–30)
+Bottom row: Mature phase (day 30–60)
+Columns: T500, U500, Z500, Wind500, Wind10
+X-axis of each sub-panel: Lat band (Tropics | Midlatitudes | Polar)
+Y-axis: % RMSE improvement vs control (positive = better, negative = worse)
+Bars: 3 per x-group, one for each insertion type
+  Red   = T-insertion
+  Blue  = Wind-insertion
+  Orange= Z-insertion
+Annotations: % value on each bar top
+
+How to read it:
+  1. Compare bar heights within a group (Tropics):
+     Which insertion is most effective in the tropics?
+  2. Compare same insertion across bands:
+     Is T-insertion more effective in midlatitudes than tropics?
+  3. Compare top vs bottom row:
+     How much of the improvement is IC correction (early) vs bias correction (mature)?
+
+  Key diagnostics:
+  - If all bars in a column are roughly equal height: insertion corrects a
+    latitude-independent systematic error.
+  - If midlatitude bars are tallest: dynamical coupling is the mechanism.
+  - If mature-phase bars are tall: insertions correct a persistent model bias.
+  - Negative bars: insertion WORSENS the model — analysis shock or wrong variable.
+
+
+────────────────────────────────────────────────────────────────────────────────
+11.  WHAT EACH VALUE TELLS YOU
+────────────────────────────────────────────────────────────────────────────────
+
+Time-series RMSE value at day 30, Midlatitudes, Z500, Control:
+  Interpretation: On average, 30 days after IC, FCNv2's Z500 in the
+  midlatitude band has an area-weighted RMS error of this many m²/s²
+  relative to ERA5 truth. A value of ~1000 m²/s² corresponds to ~100 m
+  geopotential height error, which is meteorologically significant
+  (synoptic scale weather systems have amplitudes of 100–300 m).
+
+Time-series RMSE value at day 30, Midlatitudes, T500, T-insertion:
+  Interpretation: After inserting ERA5 T500 truth into FCNv2 at every step,
+  the residual T500 error in the midlatitudes at day 30 is this many K.
+  If this is similar to the control value: T-insertion in the initial phase
+  doesn't help T500 in the midlatitudes long-term (expected — corrections decay).
+
+Pct improvement = 8.5%, Z-insertion, Midlatitudes, T500, Mature phase:
+  Interpretation: In the mature phase (day 30–60), Z-insertion reduces
+  the mean T500 RMSE in the midlatitude band by 8.5% compared to the
+  control run. This means the geopotential insertion is correcting a
+  systematic T500 bias that persists throughout the mature phase.
+
+Negative pct improvement = -3.2%, T-insertion, Polar, U500, Early phase:
+  Interpretation: T-insertion WORSENS polar U500 by 3.2% in the early phase.
+  This indicates "analysis shock" — inserting corrected T500 creates
+  imbalances (e.g., ageostrophic circulations) that temporarily degrade U500
+  in the polar band where the model's dynamical balances are more sensitive.
+
+
+────────────────────────────────────────────────────────────────────────────────
+12.  TROUBLESHOOTING NOTES
+────────────────────────────────────────────────────────────────────────────────
+
+ERA5 GRIB loading with cfgrib:
+
+  Pressure-level variables:
+    filter_by_keys = {
+        "typeOfLevel": "isobaricInhPa",
+        "level": 500,
+        "shortName": "t"  # or "u", "v", "z"
+    }
+
+  Surface variables (10m wind):
+    filter_by_keys = {
+        "typeOfLevel": "surface",
+        "shortName": "10u"   # or "10v"
+    }
+    Note: ERA5 surface 10m wind is stored as typeOfLevel='surface', level=0
+    in GRIB format (NOT 'heightAboveGround', level=10 as one might expect).
+
+  Scalar coordinate removal (required before xr.concat across months):
+    drop_list = [c for c in ds.coords
+                 if ds.coords[c].dims == ()
+                 or c in ('step','number','isobaricInhPa','surface','valid_time',
+                          'heightAboveGround')]
+    ds = ds.drop_vars(drop_list, errors='ignore')
+
+  TimedeltaIndex indexing (common error):
+    deltas = np.abs(era5_times - target_time)  → returns TimedeltaIndex
+    idx = deltas.argmin()
+    deltas[idx].total_seconds()   # ← correct (square bracket indexing)
+    deltas.iloc[idx]              # ← WRONG — TimedeltaIndex has no .iloc
+
+FCN h5py loading:
+    with h5py.File(path, "r") as f:
+        arr = f["prediction"][:, channel_idx, :, :]   # (120, 721, 1440)
+    Memory: 120 × 721 × 1440 × 4 bytes ≈ 499 MB per variable per run
+
+  Process one run at a time; del and gc.collect() between runs.
+
+ERA5 latitude orientation:
+    ERA5 GRIB lat is 90→-90 (descending) by default.
+    FCNv2 grid: linspace(90, -90, 721) → also 90→-90.
+    Flip check: if lat_vals[0] < lat_vals[-1]: da = da.isel(latitude=slice(None,None,-1))
+    This ensures consistent N-to-S orientation before comparison.
+
+
+================================================================================
+END OF SECTION 5.7 METHODS AND INTERPRETATION
+================================================================================

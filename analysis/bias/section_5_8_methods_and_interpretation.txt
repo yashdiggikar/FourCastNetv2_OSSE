@@ -1,0 +1,887 @@
+================================================================================
+SECTION 5.8 — METHODS, FORMULAS, AND INTERPRETATION GUIDE
+FourCastNetv2 Spatial Bias Analysis: How Everything Was Calculated and What
+Every Number and Plot Means
+================================================================================
+
+This document is a companion to section_5_8_theoretical_analysis.txt.
+It focuses on the HOW: exact formulas, step-by-step procedure, units, and a
+plain-language interpretation of every metric and every figure.
+
+================================================================================
+PART I: DATA AND ALIGNMENT
+================================================================================
+
+------------------------------------------------------------------------
+1.1  Input files and what they contain
+------------------------------------------------------------------------
+
+TRUTH (ERA5 reanalysis)
+  Files : era5_pressure_2023_02.grib  (Feb 2023, 28 days)
+          era5_pressure_2023_03.grib  (Mar 2023, 31 days)
+          era5_pressure_2023_04.grib  (Apr 2023, days 1-15)
+  Time  : 6-hourly (00:00, 06:00, 12:00, 18:00 UTC every day)
+  Grid  : 721 latitude x 1440 longitude (0.25 degree, global)
+  Levels: 13 pressure levels (50, 100, 150, 200, 250, 300, 400, 500,
+          600, 700, 850, 925, 1000 hPa)
+  Variables loaded at 500 hPa:
+    t   : temperature               (K)
+    u   : zonal wind                (m/s)
+    v   : meridional wind           (m/s)
+    z   : geopotential              (m2/s2)
+    q   : specific humidity         (kg/kg) — loaded but NOT used for bias
+          because FCN has relative humidity (r), not specific humidity.
+
+FCN FORECAST (FourCastNetv2)
+  Control  : forecast_normal_60days_12hr.nc
+  T-ins    : forecast_truth_injected_60days_12hr_FINAL.nc
+  Wind-ins : forecast_uv_injected_60days_12hr_FINAL.nc
+  Z-ins    : forecast_z_injected_60days_12hr_FINAL.nc
+  Time  : 12-hourly (00:00 and 12:00 UTC every day), 120 steps total
+  IC    : 2023-02-01 00:00 UTC
+  End   : 2023-04-01 12:00 UTC  (step 0 to step 119)
+  Grid  : 721 latitude x 1440 longitude (0.25 degree, global)
+  Format: NetCDF4, variable "prediction" has shape (time, channel, lat, lon)
+  Channels: 73 total. The ones used here:
+    channel 15 = "u500"  : zonal wind at 500 hPa        (m/s)
+    channel 28 = "v500"  : meridional wind at 500 hPa   (m/s)
+    channel 41 = "z500"  : geopotential at 500 hPa      (m2/s2)
+    channel 54 = "t500"  : temperature at 500 hPa       (K)
+  Note: channel 67 = "r500" is relative humidity (not specific humidity).
+        ERA5 has specific humidity q. These are different quantities with
+        different units. Bias comparison would be meaningless, so r/q is
+        skipped entirely.
+
+------------------------------------------------------------------------
+1.2  Time alignment: why only 00:00 and 12:00 UTC from ERA5
+------------------------------------------------------------------------
+
+ERA5 is 6-hourly: it has data at 00, 06, 12, 18 UTC every day.
+FCN is 12-hourly: it has data only at 00 and 12 UTC every day.
+
+To compare FCN forecast against ERA5 truth at the same moment in time,
+ERA5 is subsetted to only the 00:00 and 12:00 UTC timesteps. The 06:00
+and 18:00 UTC ERA5 data are discarded for this analysis.
+
+Result: both FCN and ERA5 have exactly 120 matched timesteps
+        (2023-02-01 00:00 to 2023-04-01 12:00, every 12 hours).
+
+------------------------------------------------------------------------
+1.3  Grid alignment: why no interpolation was needed
+------------------------------------------------------------------------
+
+Both FCN and ERA5 are on a 0.25-degree regular latitude-longitude grid:
+  721 latitudes from 90.0 N to 90.0 S (step -0.25 degrees)
+  1440 longitudes from 0.0 E to 359.75 E (step +0.25 degrees)
+
+The grids are identical. No spatial interpolation is needed or performed.
+The check confirmed: ERA5 lat array matches FCN lat array to within 0.01 deg.
+
+------------------------------------------------------------------------
+1.4  Unit alignment
+------------------------------------------------------------------------
+
+Variable   FCN unit       ERA5 unit      Action
+---------  -------------  -------------  ---------------------------------
+T500       Kelvin (K)     Kelvin (K)     None needed. Confirmed by range:
+                                         FCN 205–273 K, ERA5 222–278 K.
+U500       m/s            m/s            None needed.
+V500       m/s            m/s            None needed.
+Z500       m2/s2          m2/s2          None needed.
+                                         FCN range: 39,070–58,258 m2/s2
+                                         ERA5 range: 45,949–58,488 m2/s2
+                                         Both are geopotential, not
+                                         geopotential height. Confirmed
+                                         by magnitude (~55,000 m2/s2
+                                         expected for 500 hPa).
+
+NOTE on Z500 units:
+  Geopotential (Phi, in m2/s2) and geopotential HEIGHT (Z, in meters) are
+  related by: Z = Phi / g, where g = 9.80665 m/s2.
+  At 500 hPa: Phi ~ 55,000 m2/s2, Z ~ 5,600 m.
+  Both FCN and ERA5 store geopotential (m2/s2), so no division is needed.
+  The bias values (e.g., MAB = 588 m2/s2) can be converted to meters of
+  geopotential height by dividing by g: 588 / 9.80665 = 59.9 m.
+
+================================================================================
+PART II: MATURE PHASE SELECTION
+================================================================================
+
+------------------------------------------------------------------------
+2.1  What is the "mature phase" and why use it?
+------------------------------------------------------------------------
+
+A weather forecast has two broad regimes:
+
+  SPIN-UP phase (lead days 0 to ~30):
+    The forecast is still close to its initial condition. Errors are
+    growing but are still relatively small. The model is in transition
+    from the initial state toward its own dynamical equilibrium.
+
+  MATURE phase (lead day 30 onward):
+    The forecast has drifted far enough from the initial condition that
+    it is no longer "remembering" the IC. Errors are large and spatially
+    structured. The atmosphere the model is simulating is now substantially
+    different from the real atmosphere.
+
+For Section 5.8 (spatial bias analysis), the mature phase is chosen because:
+  - It reveals the model's systematic tendencies most clearly (biases
+    driven by the model's physics, not by IC quality).
+  - It is the most challenging regime for extended-range prediction.
+  - Insertion experiments in the mature phase test whether truth data can
+    rescue a degraded forecast — the most demanding test of insertion value.
+
+------------------------------------------------------------------------
+2.2  Exact definition used here
+------------------------------------------------------------------------
+
+  IC time     : 2023-02-01 00:00 UTC
+  Mature start: IC + 30 days = 2023-03-03 00:00 UTC
+  Mature end  : last available FCN step = 2023-04-01 12:00 UTC
+
+  Number of mature-phase steps: 60
+  (FCN steps 60 through 119 of the 120-step forecast)
+
+  Lead times at mature phase start and end:
+    Step 60:  lead time = 60 x 12 hr = 720 hr = 30.0 days
+    Step 119: lead time = 119 x 12 hr = 1428 hr = 59.5 days
+
+  ERA5 mature-phase timesteps: the same 60 times (00 and 12 UTC,
+    2023-03-03 to 2023-04-01 12:00). Only March and April ERA5 files
+    are needed (the February file is not used for bias calculation).
+
+================================================================================
+PART III: BIAS FORMULA AND CALCULATION
+================================================================================
+
+------------------------------------------------------------------------
+3.1  Spatial mean bias formula
+------------------------------------------------------------------------
+
+For a single variable V, the spatial mean bias at grid point (lat, lon) is:
+
+  bias(lat, lon) = (1/N) * SUM over t from t1 to tN of [FCN(t,lat,lon) - ERA5(t,lat,lon)]
+
+where:
+  N       = number of mature-phase timesteps = 60
+  t1      = first mature-phase time = 2023-03-03 00:00 UTC
+  tN      = last mature-phase time  = 2023-04-01 12:00 UTC
+  FCN(t,lat,lon) = FCN forecast value at time t, latitude lat, longitude lon
+  ERA5(t,lat,lon) = ERA5 truth value at the same time, lat, lon
+
+The result is a 2D array of shape (721 lat, 1440 lon) with units matching
+the variable (K for T500, m/s for U500/V500/Wind500, m2/s2 for Z500).
+
+Plain-language meaning:
+  bias(lat, lon) = at this specific location, on average over all 60
+  mature-phase timesteps, how far above or below truth is the FCN forecast?
+
+  Positive bias: FCN is systematically too high (too warm, too fast, etc.)
+  Negative bias: FCN is systematically too low (too cold, too slow, etc.)
+  Zero bias: FCN is unbiased at this location (but may still have large
+             random errors cancelling each other out)
+
+------------------------------------------------------------------------
+3.2  Mean bias (global scalar)
+------------------------------------------------------------------------
+
+  mean_bias = (1 / (Nlat x Nlon)) * SUM over all (lat,lon) of bias(lat,lon)
+
+This is the spatially-averaged bias — a single number summarizing whether
+the model is globally too high or too low for this variable.
+
+Values computed for control run:
+  T500    mean bias = -0.52 K         (slight global cold bias)
+  U500    mean bias = -0.03 m/s       (effectively zero mean)
+  V500    mean bias = +0.04 m/s       (effectively zero mean)
+  Z500    mean bias = -144.7 m2/s2    (systematic low-pressure bias, ~14.7 m)
+  Wind500 mean bias = -1.01 m/s       (slight underestimation of wind speed)
+
+NOTE: Mean bias close to zero does NOT mean the model is accurate. It means
+the positive and negative errors cancel each other spatially. The model may
+still be very wrong locally (see MAB below).
+
+------------------------------------------------------------------------
+3.3  Mean Absolute Bias (MAB)
+------------------------------------------------------------------------
+
+  MAB = (1 / (Nlat x Nlon)) * SUM over all (lat,lon) of |bias(lat,lon)|
+
+This is the spatially-averaged ABSOLUTE bias. It does NOT allow positive and
+negative errors to cancel. It measures the typical size of the bias regardless
+of sign.
+
+  MAB values for control run:
+    T500    MAB = 2.20 K
+    U500    MAB = 4.68 m/s
+    V500    MAB = 3.37 m/s
+    Z500    MAB = 588.4 m2/s2   (= 60.0 geopotential meters after /g)
+    Wind500 MAB = 3.47 m/s
+
+Interpretation:
+  T500: At a typical location on the map, the FCN forecast temperature is
+        about 2.2 K away from truth during the mature phase.
+  Z500: At a typical location, geopotential is about 588 m2/s2 (60 m) away
+        from truth — this is very large. The climatological standard deviation
+        of Z500 is about 1,500–2,000 m2/s2, so the MAB is roughly 30–40% of
+        natural variability. The forecast has essentially lost phase coherence
+        with the real atmospheric circulation.
+  U500: Typical zonal wind errors of 4.68 m/s on a background of ~20 m/s
+        average jet-stream winds = about 23% error in wind magnitude.
+
+------------------------------------------------------------------------
+3.4  Derived variable: Wind500
+------------------------------------------------------------------------
+
+Wind500 is the 500 hPa horizontal wind speed (scalar speed, not a vector).
+
+  Formula:
+    Wind500(t, lat, lon) = sqrt( U500(t,lat,lon)^2 + V500(t,lat,lon)^2 )
+
+This is computed independently for FCN and ERA5 at every timestep and
+grid point, and THEN biased:
+
+  bias_Wind500(lat,lon) = (1/N) * SUM_t [ sqrt(U_fcn^2 + V_fcn^2)
+                                         - sqrt(U_era5^2 + V_era5^2) ]
+
+This is NOT the same as sqrt(bias_U^2 + bias_V^2). The bias of a
+nonlinear function is not the function of the individual biases.
+
+Why use Wind500 and not just U500 and V500 separately?
+  Wind speed captures the magnitude of the flow regardless of direction.
+  A model might have zero U500 bias and zero V500 bias but still have a
+  Wind500 bias if the direction errors cause speed underestimation.
+
+================================================================================
+PART IV: BIAS REDUCTION FORMULA AND CALCULATION
+================================================================================
+
+------------------------------------------------------------------------
+4.1  Bias reduction definition
+------------------------------------------------------------------------
+
+For each insertion experiment (T-ins, Wind-ins, Z-ins), bias reduction
+measures how much the insertion improved the bias compared to the control:
+
+  bias_reduction(lat, lon) = |control_bias(lat,lon)| - |insertion_bias(lat,lon)|
+
+Expanded:
+  bias_reduction(lat,lon) = |bias_control(lat,lon)| - |bias_insertion(lat,lon)|
+
+where:
+  bias_control(lat,lon)   = mean mature-phase bias of the CONTROL run
+  bias_insertion(lat,lon) = mean mature-phase bias of the INSERTION run
+  | | denotes absolute value
+
+------------------------------------------------------------------------
+4.2  Sign convention and interpretation
+------------------------------------------------------------------------
+
+  POSITIVE bias_reduction(lat,lon) means:
+    |insertion_bias| < |control_bias|
+    The insertion reduced the size of the bias at this location.
+    The model improved here. The absolute error is smaller.
+
+  NEGATIVE bias_reduction(lat,lon) means:
+    |insertion_bias| > |control_bias|
+    The insertion increased the size of the bias at this location.
+    The model got WORSE here despite inserting truth data.
+    This is the "failure mode" region.
+
+  ZERO means:
+    The insertion had no effect on the bias magnitude at this location.
+
+Why use absolute values |...|?
+  Consider a control bias of +5 at a point.
+  After insertion, the bias becomes -3 at the same point.
+  Without absolute values: "improvement" = 5 - (-3) = 8 (misleadingly large).
+  With absolute values: |5| - |-3| = 5 - 3 = 2 (correct: the error
+  shrank from 5 to 3 in magnitude, so 2 units of improvement).
+
+  The absolute value correctly captures the reduction in error magnitude
+  regardless of whether the sign of the bias changed.
+
+------------------------------------------------------------------------
+4.3  Mean bias reduction (global scalar)
+------------------------------------------------------------------------
+
+  mean_bias_reduction = spatial mean of bias_reduction(lat,lon)
+
+Positive mean = insertion improved the average bias globally.
+Negative mean = insertion worsened the average bias globally (would be
+               a catastrophic result — this did not happen for any
+               insertion in this experiment).
+
+Values computed:
+  T-ins  vs control:
+    T500    mean BR = +2.202  K         (perfect: inserted = truth)
+    U500    mean BR = +0.970  m/s
+    V500    mean BR = +1.018  m/s
+    Z500    mean BR = +237.1  m2/s2
+    Wind500 mean BR = +0.490  m/s
+
+  Wind-ins vs control:
+    T500    mean BR = +0.903  K
+    U500    mean BR = +4.681  m/s       (perfect: inserted = truth)
+    V500    mean BR = +3.370  m/s       (perfect: inserted = truth)
+    Z500    mean BR = +383.6  m2/s2
+    Wind500 mean BR = +3.466  m/s       (perfect: inserted = truth)
+
+  Z-ins vs control:
+    T500    mean BR = +1.941  K
+    U500    mean BR = +3.371  m/s
+    V500    mean BR = +2.704  m/s
+    Z500    mean BR = +588.4  m2/s2     (perfect: inserted = truth)
+    Wind500 mean BR = +2.445  m/s
+
+NOTE on "perfect" (MAB = 0.0000):
+  When a variable is inserted (replaced with ERA5 truth at every step),
+  its own bias becomes exactly zero. The model output for that channel
+  equals truth by construction. This confirms the insertion worked as
+  intended — the infrastructure is correct.
+
+------------------------------------------------------------------------
+4.4  Percentage bias reduction
+------------------------------------------------------------------------
+
+To compare across variables with different units and scales:
+
+  pct_reduction = 100 * mean_bias_reduction / control_MAB
+
+Values:
+  T-ins  effect on Z500  : 100 * 237.1  / 588.4  = 40.3%
+  Wind-ins effect on Z500: 100 * 383.6  / 588.4  = 65.2%
+  Z-ins  effect on T500  : 100 * 1.941  / 2.202  = 88.2%
+  Z-ins  effect on U500  : 100 * 3.371  / 4.681  = 72.0%
+  Z-ins  effect on V500  : 100 * 2.704  / 3.370  = 80.2%
+  Z-ins  effect on Wind500: 100 * 2.445 / 3.466  = 70.5%
+  T-ins  effect on U500  : 100 * 0.970  / 4.681  = 20.7%
+  Wind-ins effect on T500: 100 * 0.903  / 2.202  = 41.0%
+
+These percentages are used in the theoretical analysis to quantify which
+physical balance relationship is best represented in FCNv2.
+
+================================================================================
+PART V: FAILURE MODE CLASSIFICATION
+================================================================================
+
+------------------------------------------------------------------------
+5.1  Definition of "improvement" for failure-mode map
+------------------------------------------------------------------------
+
+For the failure-mode map (Figure 5.47), the diagnostic variable is Z500.
+At each grid point, three improvement scores are computed:
+
+  temp_improvement(lat,lon) = |ctrl_Z500_bias(lat,lon)|
+                              - |t_ins_Z500_bias(lat,lon)|
+
+  wind_improvement(lat,lon) = |ctrl_Z500_bias(lat,lon)|
+                              - |wind_ins_Z500_bias(lat,lon)|
+
+  geo_improvement(lat,lon)  = |ctrl_Z500_bias(lat,lon)|
+                              - |z_ins_Z500_bias(lat,lon)|
+
+Each value:
+  > 0: this insertion reduced the Z500 bias at this point (improved)
+  < 0: this insertion increased the Z500 bias at this point (worsened)
+  = 0: no change
+
+------------------------------------------------------------------------
+5.2  Threshold
+------------------------------------------------------------------------
+
+To avoid classifying tiny differences as meaningful:
+
+  threshold = 0.10 * 90th_percentile_of( |ctrl_Z500_bias| )
+
+From the computed data:
+  90th percentile of |ctrl_Z500_bias| = 1460.86 m2/s2
+  threshold = 0.10 * 1460.86 = 146.09 m2/s2
+
+A grid point is only classified as "improved" or "worsened" if the
+improvement/worsening exceeds 146 m2/s2 in magnitude. Below this
+threshold the point is classified as "Neutral / mixed" (Class 0).
+
+Why 10% of the 90th percentile?
+  The 90th percentile is a robust measure of the large-bias regions where
+  classification is most meaningful. Taking 10% of it as threshold filters
+  out noise while retaining meaningful signal. This is a standard choice
+  for classification thresholds in NWP evaluation studies.
+
+------------------------------------------------------------------------
+5.3  Classification logic
+------------------------------------------------------------------------
+
+Step 1: Compute temp_improvement, wind_improvement, geo_improvement.
+Step 2: Find which insertion has the BEST (largest) improvement: best_idx.
+Step 3: Find which insertion has the WORST (most negative) improvement: worst_idx.
+Step 4: Classify each grid point into one of 9 classes:
+
+  Class 0: Neutral / mixed
+    All three improvements are within [-threshold, +threshold].
+    No insertion clearly helps or hurts.
+    Interpretation: Z500 bias at this location is not strongly
+    responsive to any single variable correction.
+
+  Class 1: All insertions improve
+    temp_improvement > threshold AND
+    wind_improvement > threshold AND
+    geo_improvement  > threshold
+    Interpretation: Z500 error at this location has contributions from
+    all three variables. Any insertion helps because the underlying
+    dynamics are correlated across T, Wind, and Z.
+    This is the "well-coupled" class — the model has wrong balanced dynamics.
+
+  Class 2: All insertions worsen
+    temp_improvement < -threshold AND
+    wind_improvement < -threshold AND
+    geo_improvement  < -threshold
+    Interpretation: This would mean that at these points, inserting any
+    truth variable makes the Z500 forecast WORSE. This class was 0.0%
+    area in this experiment — a reassuring result meaning there is no
+    region where the model is so badly wrong that truth information hurts.
+
+  Class 3: Temperature insertion best (alone)
+    best_idx = temp, max_improvement > threshold,
+    NOT in Class 1.
+    Interpretation: At these points, T500 correction is the most
+    effective single-variable fix for Z500 bias. The Z500 error is
+    primarily thermally driven (temperature gradient errors).
+
+  Class 4: Wind insertion best (alone)
+    best_idx = wind, max_improvement > threshold.
+    Interpretation: Wind advection errors are the primary driver of
+    Z500 bias here.
+
+  Class 5: Geopotential insertion best (alone) — 18.1% of globe
+    best_idx = geo, max_improvement > threshold,
+    NOT in Class 1.
+    Interpretation: At these points, correcting Z500 itself is the
+    only effective fix, and T or Wind correction is insufficient.
+    These are regions where the Z500 error is "internally generated"
+    by the model's dynamical inconsistencies rather than driven by
+    T or Wind errors. Typically: barotropic flow regimes, dipole
+    blocking patterns, strong planetary wave anomalies that are
+    purely geopotential-driven.
+
+  Class 6: Temperature insertion worst — 9.57% of globe
+    worst_idx = temp, min_improvement < -threshold.
+    Interpretation: Inserting correct T500 makes the Z500 bias WORSE
+    at these locations. This is the "analysis shock" class.
+    When T500 is anchored to truth but Z500 and Wind are wrong, the
+    model tries to "balance" the inconsistent state, and the resulting
+    Z500 change goes in the wrong direction.
+
+  Class 7: Wind insertion worst — 1.44% of globe
+    worst_idx = wind, min_improvement < -threshold.
+    Interpretation: Similar to Class 6 but for wind insertion.
+    Less common because wind correction more directly fixes
+    geopotential through advection, making "wrong direction"
+    responses rarer.
+
+  Class 8: Geopotential insertion worst — 0.0% of globe
+    worst_idx = geo, min_improvement < -threshold.
+    This class is always empty because Z-insertion sets Z500 to truth
+    exactly, making its own Z500 bias zero. The bias reduction for
+    Z-insertion vs. Z500 is always >= 0 by mathematical construction.
+
+------------------------------------------------------------------------
+5.4  Area-weighted percentages
+------------------------------------------------------------------------
+
+A simple area average would overweight the poles (where grid cells are
+physically small despite having the same lat-lon extent as equatorial cells).
+Cosine-latitude weighting corrects for this:
+
+  weight(lat) = cos( lat * pi/180 )
+
+The weight is highest at the equator (weight = 1) and zero at the poles
+(weight = 0), proportional to the true physical area of each latitude band.
+
+  area_pct(class k) = 100 * [ SUM over all (lat,lon) where class=k of weight(lat) ]
+                            / [ SUM over all (lat,lon) of weight(lat) ]
+
+This gives the true fractional AREA of the globe in each class, accounting
+for the spherical geometry of the Earth.
+
+Results (area-weighted):
+  Class 0 - Neutral / mixed        : 38.84%
+  Class 1 - All insertions improve : 32.04%
+  Class 2 - All insertions worsen  :  0.00%
+  Class 3 - Temp-insertion best    :  0.00%
+  Class 4 - Wind-insertion best    :  0.00%
+  Class 5 - Geo-insertion best     : 18.11%
+  Class 6 - Temp-insertion worst   :  9.57%
+  Class 7 - Wind-insertion worst   :  1.44%
+  Class 8 - Geo-insertion worst    :  0.00%
+
+================================================================================
+PART VI: PLOT-BY-PLOT INTERPRETATION GUIDE
+================================================================================
+
+------------------------------------------------------------------------
+FIGURE 5.43 — FCN Control Run Mature-Phase Mean Bias Maps
+File: Figure_5_43_FCN_control_mature_phase_bias_maps.png / .pdf
+------------------------------------------------------------------------
+
+WHAT IT SHOWS:
+  Four global maps (one per row):
+    Row 1: T500 bias (K)         — temperature error map
+    Row 2: U500 bias (m/s)       — zonal wind error map
+    Row 3: Z500 bias (m2/s2)     — geopotential error map
+    Row 4: Wind500 bias (m/s)    — wind speed error map
+
+  Each map uses a red-white-blue (RdBu_r) diverging colormap:
+    Red   = positive bias (FCN is too high/warm/fast at that location)
+    Blue  = negative bias (FCN is too low/cold/slow at that location)
+    White = near-zero bias (model is unbiased at that location)
+
+  The colormap limits are set symmetrically to the 97th percentile of the
+  absolute bias, so extreme outliers do not dominate the color scale.
+
+WHAT TO LOOK FOR IN EACH PANEL:
+
+  T500 bias (Row 1):
+    - Are there large red or blue patches? → systematic warm/cold regions.
+    - Do the patterns align with known features (polar vortex, tropics)?
+    - Typical control T500 MAB = 2.20 K. A large blue patch of -26 K
+      somewhere indicates a catastrophically misplaced polar vortex edge.
+    - Blue (cold bias) in the polar regions would indicate the model's
+      polar vortex has drifted equatorward or intensified unrealistically.
+    - Red (warm bias) in the subtropics would indicate the subtropical jet
+      is misplaced and advecting too much warm air.
+
+  U500 bias (Row 2):
+    - Alternating red-blue bands aligned with latitude → jet stream is
+      displaced: if blue equatorward of the jet position and red poleward,
+      the jet has shifted poleward in the model.
+    - East-west alternation → the model's planetary wave pattern is out
+      of phase with reality (the jet is undulating in a different location).
+    - MAB = 4.68 m/s. Any region with bias > 10 m/s is severely wrong.
+
+  Z500 bias (Row 3):
+    - This is the most important panel. Z500 encodes the entire large-scale
+      circulation (troughs = low Z500, ridges = high Z500).
+    - Continuous blue patches = persistent model troughs where there should
+      be ridges, or too-deep troughs (the model's atmosphere is too cold there).
+    - Continuous red patches = persistent model ridges where there should
+      be troughs, or too-high pressure systems.
+    - MAB = 588 m2/s2 (60 m). The range goes to -9,389 m2/s2 locally.
+      Regions with |bias| > 2,000 m2/s2 are essentially in the wrong
+      atmospheric pattern entirely.
+    - The global mean bias of -144 m2/s2 (the whole map is slightly blue-
+      shifted) indicates the model atmosphere is on average slightly too cold
+      or too low-pressure globally.
+
+  Wind500 bias (Row 4):
+    - Red = FCN is overestimating wind speed here.
+    - Blue = FCN is underestimating wind speed (the more common error).
+    - The global mean bias of -1.01 m/s means the model is systematically
+      too slow everywhere. This is the "spectral smoothing" effect of the
+      L2 training loss.
+    - Strong negative (blue) patches in the jet stream latitude bands indicate
+      the model has weakened the extratropical jet cores.
+
+OVERALL INTERPRETATION OF FIGURE 5.43:
+  This figure is the "fingerprint" of FCNv2's systematic failure modes in
+  the mature phase. Any region that is strongly red or blue is a location
+  where the model's autoregressive dynamics have caused the forecast to
+  drift systematically away from reality. These patterns repeat case after
+  case in the mature phase — they are not random errors, they are structural
+  biases encoded in the learned neural network weights.
+
+------------------------------------------------------------------------
+FIGURE 5.44 — Temperature-Insertion: U500 and Z500 Bias Reduction
+File: Figure_5_44_FCN_temperature_insertion_bias_reduction.png / .pdf
+------------------------------------------------------------------------
+
+WHAT IT SHOWS:
+  Two rows (one for U500, one for Z500), three columns each:
+    Column 1: Control bias        (reference: what the free run looks like)
+    Column 2: T-insertion bias    (what happens after we feed in truth T500)
+    Column 3: Bias reduction map  (column 1 absolute - column 2 absolute)
+
+  Columns 1 and 2 use the same RdBu_r colormap with the same limits,
+  so the two maps are directly visually comparable.
+
+  Column 3 also uses RdBu_r:
+    Red (positive) = insertion REDUCED the bias here (IMPROVED)
+    Blue (negative) = insertion INCREASED the bias here (WORSENED)
+
+WHAT TO LOOK FOR:
+
+  Row 1 (U500):
+    Control bias (col 1): large red/blue patches showing jet stream errors.
+    T-ins bias (col 2): similar pattern but slightly weaker. The 21% reduction
+      means the patches are slightly less vivid.
+    Bias reduction (col 3): mostly red (positive) = T insertion generally helps
+      U500. Some blue spots (T insertion hurts U500 locally). The blue spots in
+      U500 bias reduction represent regions where correcting temperature creates
+      a thermal wind imbalance that the model resolves by worsening the wind.
+
+  Row 2 (Z500):
+    Control bias (col 1): strong Z500 errors.
+    T-ins bias (col 2): noticeably weaker. The 40% reduction should be visible
+      as a significant color fading.
+    Bias reduction (col 3): predominantly red (T insertion helps Z500 broadly).
+      Scattered blue = regions where T insertion worsens Z500. These are the
+      thermal-dynamical inconsistency regions discussed in the theoretical analysis.
+
+KEY QUESTION this figure answers:
+  "If we could somehow know and correct the temperature error at 500 hPa,
+  how much would that help the circulation (Z500) and jet (U500)?"
+  Answer: Z500 improves by 40%, U500 improves by 21%.
+
+------------------------------------------------------------------------
+FIGURE 5.45 — Wind-Insertion: T500 and Z500 Bias Reduction
+File: Figure_5_45_FCN_wind_insertion_bias_reduction.png / .pdf
+------------------------------------------------------------------------
+
+WHAT IT SHOWS:
+  Two rows (T500 and Z500), three columns (control, wind-ins, bias reduction).
+  Same color convention as Figure 5.44.
+
+WHAT TO LOOK FOR:
+
+  Row 1 (T500):
+    Control bias (col 1): T500 error map (should look the same as in Fig 5.43).
+    Wind-ins bias (col 2): T500 errors after wind correction. MAB reduces
+      from 2.20 K to 1.30 K (41% improvement). The remaining 1.30 K is the
+      T500 error that cannot be fixed by winds alone — it comes from the
+      model's thermodynamic (heating/cooling) errors.
+    Bias reduction (col 3): Where wind insertion MOST helps T500 (red patches)
+      tends to be in the storm track regions and jet exit zones where
+      temperature advection by the wind is the dominant process.
+
+  Row 2 (Z500):
+    Control bias (col 1): Z500 error map.
+    Wind-ins bias (col 2): Z500 errors after wind correction. MAB reduces from
+      588 m2/s2 to 205 m2/s2 (65% improvement). The remaining 205 m2/s2 is
+      the Z500 error from non-advective sources (diabatic heating, pressure
+      tendency from temperature errors).
+    Bias reduction (col 3): Should show the most improvement in regions with
+      strong Z500 anomalies being advected by the jet — the storm track regions
+      over the North Atlantic and North Pacific where advection dominates the
+      Z500 budget.
+
+KEY COMPARISON — Figures 5.44 vs 5.45:
+  Wind insertion (Fig 5.45) reduces Z500 bias by 65% — FAR more than
+  temperature insertion (Fig 5.44) which reduces Z500 bias by only 40%.
+  This is the key result showing that, in FCNv2's mature phase, Z500 errors
+  are primarily driven by incorrect wind advection, not incorrect temperature.
+
+------------------------------------------------------------------------
+FIGURE 5.46 — Geopotential-Insertion: T500 and Wind500 Bias Reduction
+File: Figure_5_46_FCN_geopotential_insertion_bias_reduction.png / .pdf
+------------------------------------------------------------------------
+
+WHAT IT SHOWS:
+  Two rows (T500 and Wind500), three columns (control, Z-ins, bias reduction).
+
+WHAT TO LOOK FOR:
+
+  Row 1 (T500):
+    Control bias (col 1): T500 error (same as before).
+    Z-ins bias (col 2): T500 after Z500 correction. MAB drops from 2.20 K to
+      0.26 K (88% improvement). The map should look almost entirely white
+      (near-zero bias) — inserting correct Z500 essentially eliminates T500
+      errors. This is the hypsometric relationship: the model has learned that
+      Z500 encodes the vertically-integrated temperature information.
+    Bias reduction (col 3): Almost entirely red (Z500 correction benefits
+      temperature everywhere). The small remaining blue spots (if any) represent
+      the 12% of T500 error that cannot be corrected by Z500 information —
+      likely in the tropics (where the hypsometric relationship is modified by
+      moist convection) or near the surface (where boundary-layer processes
+      decouple T from Z).
+
+  Row 2 (Wind500):
+    Control bias (col 1): Wind speed error map.
+    Z-ins bias (col 2): Wind500 after Z500 correction. MAB drops from 3.47 m/s
+      to 1.02 m/s (71% improvement). The remaining 1.02 m/s is ageostrophic
+      wind — the component of the wind that cannot be diagnosed from Z500 alone.
+    Bias reduction (col 3): Red (improvement) should dominate, especially in
+      the extratropics where geostrophic balance is strongest. Blue spots
+      represent regions where the model's ageostrophic response to correct
+      Z500 but wrong other variables moves wind speed in the wrong direction.
+
+KEY RESULT in Figure 5.46:
+  This figure provides the single clearest demonstration that Z500 is the
+  "master variable" in FCNv2. Correcting just Z500 at 500 hPa eliminates:
+    - 88% of T500 error
+    - 71% of Wind500 error
+  More than any other single-variable insertion.
+
+------------------------------------------------------------------------
+FIGURE 5.47 — Failure-Mode Summary Map
+File: Figure_5_47_FCN_failure_mode_summary_map.png / .pdf
+------------------------------------------------------------------------
+
+WHAT IT SHOWS:
+  A single global map with 9 discrete colors, each color representing one
+  failure-mode class (see Section 5.3 above for class definitions).
+
+COLOR KEY:
+  Gray   (Class 0): Neutral / mixed — no strong signal             38.84%
+  Green  (Class 1): All insertions improve                         32.04%
+  Dark red (Class 2): All insertions worsen                         0.00%
+  Blue   (Class 3): Temperature insertion is uniquely best          0.00%
+  Purple (Class 4): Wind insertion is uniquely best                 0.00%
+  Orange (Class 5): Geopotential insertion is uniquely best        18.11%
+  Dark blue (Class 6): Temperature insertion is uniquely worst      9.57%
+  Dark purple (Class 7): Wind insertion is uniquely worst           1.44%
+  Brown  (Class 8): Geopotential insertion is uniquely worst        0.00%
+
+WHAT TO LOOK FOR:
+
+  GREEN regions (32% of globe):
+    Where you see green, the model's Z500 error has a balanced structure:
+    all three insertions help because the T, Wind, and Z errors are
+    dynamically coupled at those locations.
+    These are typically the main baroclinic storm track regions
+    (North Atlantic, North Pacific, Southern Ocean) where the atmosphere
+    is most dynamically active and variable coupling is strongest.
+
+  ORANGE regions (18% of globe):
+    Where only Z-insertion helps, while T and Wind insertions are
+    insufficient. These are regions with barotropic or quasi-stationary
+    circulation anomalies that the model has generated purely through
+    Z500 dynamics, decoupled from local T or Wind errors.
+    Look for these in the subtropics (blocking anticyclones), the polar
+    regions (vortex anomalies), or over the continents (stationary waves).
+
+  DARK BLUE regions (10% of globe):
+    The danger zone — where inserting truth temperature makes the Z500
+    forecast WORSE. This is the most important failure region for
+    understanding ML data assimilation limitations.
+    These regions likely correspond to: frontal zones, jet stream exit
+    regions, subtropical anticyclone edges — anywhere where the atmosphere
+    requires a balanced multivariate correction rather than a single-
+    variable fix. The model creates a dynamical inconsistency when T is
+    corrected without simultaneously correcting the winds and Z at other
+    levels.
+
+  GRAY regions (39% of globe):
+    These are "silent" regions where insertion effects are small but not
+    clearly directional. Either the model has small bias here already, or
+    the model's coupling is weak and inserting single variables has little
+    effect. These may be regions of weak mid-tropospheric dynamics (tropical
+    belt, subtropical high pressure regions) or regions where the model's
+    errors are already below the classification threshold.
+
+IMPORTANT NOTE on absent classes (0%, 0%, 0%, 0%):
+  Classes 2, 3, 4, 8 are all zero area. This tells you:
+    - Class 2 = 0%: GOOD. No region is so badly wrong that all three
+      insertions make it worse. The model never enters a "trap" state.
+    - Class 3 = 0%, Class 4 = 0%: Temp-only or Wind-only is never the
+      uniquely best strategy. When these help uniquely, they do so in
+      combination (Class 1) not in isolation.
+    - Class 8 = 0%: Expected. Z-insertion cannot worsen its own target
+      variable.
+
+================================================================================
+PART VII: CSV FILE STRUCTURE AND CONTENTS
+================================================================================
+
+------------------------------------------------------------------------
+7.1  Individual bias files: FCN_{run}_{var}_bias.csv
+------------------------------------------------------------------------
+
+Columns: lat, lon, bias
+Rows   : 721 x 1440 = 1,038,240 rows (one per global grid point)
+
+lat: latitude in degrees (-90 to 90)
+lon: longitude in degrees (0 to 359.75)
+bias: mean bias (FCN - ERA5) over the 60 mature-phase steps, in variable units
+
+Example rows from FCN_control_z500_bias.csv:
+  lat,   lon,  bias
+  90.0,  0.00, -154.3
+  90.0,  0.25, -152.7
+  ...
+
+How to use this file:
+  - Load in Python (pd.read_csv), NumPy, Excel, or any spreadsheet.
+  - To reconstruct the 2D map: df.pivot(index='lat', columns='lon', values='bias')
+  - To compute MAB: df['bias'].abs().mean()
+  - To find worst locations: df.nsmallest(10, 'bias') or df.nlargest(10, 'bias')
+
+------------------------------------------------------------------------
+7.2  Combined files: FCN_{run}_{var}_combined.csv
+------------------------------------------------------------------------
+
+Columns: lat, lon, control_bias, insertion_bias, bias_reduction
+
+control_bias   : mean(control_FCN - ERA5) at this point
+insertion_bias : mean(insertion_FCN - ERA5) at this point
+bias_reduction : |control_bias| - |insertion_bias|
+
+Positive bias_reduction = insertion helped (improved) at this point.
+Negative bias_reduction = insertion hurt (worsened) at this point.
+
+Example: FCN_t_ins_z500_combined.csv
+  lat, lon, control_bias, insertion_bias, bias_reduction
+  45.0, 270.0, -850.2, -510.1, 340.1    ← insertion reduced Z500 error by 340
+  45.0, 270.25, -862.5, -915.3, -52.8   ← insertion slightly worsened Z500 here
+
+------------------------------------------------------------------------
+7.3  Failure mode map: FCN_failure_mode_map.csv
+------------------------------------------------------------------------
+
+Columns: lat, lon, class_id, class_name
+
+class_id   : integer 0–8 (see classification table in Section 5.3)
+class_name : text label (e.g., "All insertions improve", "Neutral / mixed")
+
+This file contains 1,038,240 rows. You can subset it to find specific classes:
+  df_class1 = df[df['class_id'] == 1]   # all "all improve" grid points
+  df_worst_T = df[df['class_id'] == 6]  # temp-insertion worsens Z500
+
+------------------------------------------------------------------------
+7.4  Area summary: FCN_failure_mode_area_summary.csv
+------------------------------------------------------------------------
+
+Columns: class_id, class_name, area_pct
+
+9 rows, one per class.
+area_pct is the cosine-latitude-weighted fractional area percentage.
+
+This is the small summary table for reporting in thesis tables or figures.
+
+================================================================================
+PART VIII: QUICK REFERENCE — FORMULA SUMMARY
+================================================================================
+
+  BIAS:
+    bias(lat,lon) = (1/N) * SUM_t [FCN(t,lat,lon) - ERA5(t,lat,lon)]
+    N = 60 (mature phase timesteps)
+
+  MEAN BIAS (global):
+    mean_bias = mean over all (lat,lon) of bias(lat,lon)
+
+  MEAN ABSOLUTE BIAS (MAB):
+    MAB = mean over all (lat,lon) of |bias(lat,lon)|
+
+  WIND SPEED:
+    Wind500(t,lat,lon) = sqrt(U500^2 + V500^2)  [computed before bias]
+
+  BIAS REDUCTION:
+    bias_red(lat,lon) = |control_bias(lat,lon)| - |insertion_bias(lat,lon)|
+    Positive = improved, Negative = worsened
+
+  PERCENT REDUCTION:
+    pct = 100 * mean(bias_red) / control_MAB
+
+  FAILURE MODE THRESHOLD:
+    threshold = 0.10 * percentile_90( |control_bias_Z500| )
+    = 0.10 * 1460.86 = 146.09 m2/s2
+
+  AREA-WEIGHTED PERCENTAGE:
+    area_pct(class k) = 100 * SUM_{class=k}[cos(lat)] / SUM_all[cos(lat)]
+
+  UNIT CONVERSION (Z500):
+    geopotential (m2/s2) / 9.80665 = geopotential height (m)
+    e.g., MAB = 588.4 m2/s2 = 60.0 geopotential meters
+
+================================================================================
+END OF METHODS AND INTERPRETATION GUIDE
+================================================================================

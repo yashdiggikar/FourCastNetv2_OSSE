@@ -1,0 +1,677 @@
+================================================================================
+SECTION 5.8 — THEORETICAL ANALYSIS OF FCN SPATIAL BIAS STRUCTURE
+FourCastNetv2 Mature-Phase Bias and Insertion Experiments
+Thesis: ML-Based Data Assimilation for Numerical Weather Prediction
+Author: Yash Diggikar, UMBC / JCET
+================================================================================
+
+Experiment configuration
+  Model           : FourCastNetv2 (AFNO architecture, 73 channels, 0.25 deg)
+  Initial condition: 2023-02-01 00:00 UTC
+  Forecast length : 60 days (120 x 12-hr steps)
+  Mature phase    : Lead day 30–59.5 (2023-03-03 to 2023-04-01T12, 60 steps)
+  Truth           : ERA5 reanalysis at 500 hPa, 6-hourly (aligned to 00/12 UTC)
+  Bias definition : mean(FCN - ERA5) over mature phase at each (lat,lon)
+  Insertion method: Replace target channel with ERA5 truth at every 12-hr step
+
+Quantitative summary — mean absolute bias (MAB) at 500 hPa
+  Variable   Control    T-ins      Wind-ins   Z-ins      Units
+  T500       2.2017     0.0000     1.2987     0.2605     K
+  U500       4.6814     3.7111     0.0000     1.3103     m/s
+  V500       3.3702     2.3520     0.0000     0.6662     m/s
+  Z500     588.4058   351.3241   204.8226     0.0000     m2/s2
+  Wind500    3.4664     2.9761     0.0000     1.0216     m/s
+  Z500 range: -9389 to +4330 m2/s2 (control bias extremes)
+
+================================================================================
+1. CONTROL-RUN BIAS DIAGNOSIS: WHAT THE FREE-RUNNING FCN DOES WRONG
+================================================================================
+
+1.1  The dominant failure: geopotential height drift (Z500)
+--------------------------------------------------------------
+The most striking result in the control run is the Z500 mean absolute bias of
+588 m2/s2 (approximately 60 geopotential meters, converting by g = 9.80665 m/s2).
+This represents roughly 1.1% of the climatological Z500 value (~55,000 m2/s2 in
+the extratropics during boreal spring), accumulated over 30–60 days of free
+autoregressive integration. The extremes are even more revealing: single-grid-
+point biases reach -9,389 m2/s2 (about -957 m of geopotential height) and
++4,330 m2/s2 (+441 m). The negative extreme is more than twice as large as the
+positive extreme.
+
+This asymmetry is not random. It is physically interpretable: in NWP the
+geopotential Z500 is bounded below by the surface (Z500 can only drop so much
+before the atmosphere becomes gravitationally unstable) but is not symmetrically
+bounded above. The model is therefore developing regions of anomalously deep
+troughs (spuriously low geopotential) in the mature phase. These correspond to
+quasi-stationary, amplified cyclonic anomalies that the model's autoregressive
+dynamics generate and sustain without the restoring forces that act in the real
+atmosphere (nonlinear wave breaking, baroclinic life-cycle termination, Rossby
+wave dispersion).
+
+The mean Z500 bias is -144.7 m2/s2, meaning the model's atmosphere is on average
+~14.7 m too low in geopotential height in the mature phase. This is consistent
+with a slight systematic cold bias in the thermal column (observed T500 mean bias
+= -0.52 K), since a colder atmosphere has lower geopotential heights through the
+hypsometric relationship. However, the mean bias is only a small fraction of the
+MAB (144 vs. 588), indicating that the dominant Z500 error is spatial: the model
+displaces ridges and troughs rather than uniformly cooling/warming the atmosphere.
+This is a phase error, not a magnitude error — classic behavior of autoregressive
+ML models that lose phase coherence with the real atmospheric circulation after
+~2 weeks.
+
+1.2  Wind field biases: loss of large-scale flow structure
+-----------------------------------------------------------
+The U500 MAB of 4.68 m/s and V500 MAB of 3.37 m/s are large relative to the
+typical magnitude of these fields at 500 hPa (~15–25 m/s in the jet streams).
+The mean biases are near-zero (-0.03 and +0.04 m/s respectively), confirming
+again that errors are structural (spatial displacement of jets, troughs) rather
+than systematic amplitude biases.
+
+The Wind500 MAB of 3.47 m/s with a mean bias of -1.01 m/s indicates a slight
+systematic underestimation of wind speeds in the mature phase. This is consistent
+with the well-documented tendency of ML weather models to produce smoother,
+lower-energy fields in long integrations — a consequence of the L2 loss function
+used during training, which penalizes sharp spatial gradients and implicitly
+damps high-wavenumber variance. Over 120 autoregressive steps, this spectral
+smoothing accumulates into a measurable weakening of the mid-tropospheric flow.
+
+1.3  Temperature bias: shallow drift with deep dynamical consequences
+----------------------------------------------------------------------
+The T500 MAB of 2.20 K is modest in absolute terms but consequential in its
+dynamical implications. The range of the T500 bias (min = -26.2 K, max = +22.1 K)
+reveals that the model has severely misplaced the thermal structure of the
+atmosphere in specific regions (likely near strong fronts or the poleward edge of
+the subtropical jet) while maintaining a reasonable global mean. A 26 K local
+cold bias at 500 hPa would correspond to a misplacement of the polar vortex edge
+or a collapsed troposphere in the high-latitude region — physically extreme states
+that the real atmosphere cannot sustain due to radiative and dynamical constraints
+the ML model does not enforce.
+
+================================================================================
+2. PHYSICAL COUPLING ANALYSIS: WHAT THE ML MODEL HAS LEARNED
+================================================================================
+
+The insertion experiments serve as perturbation probes of the model's internal
+physics. By replacing one variable with truth while leaving all others free, we
+isolate the cross-variable coupling that FCNv2 has learned from the ERA5 training
+data. The following subsections interpret each experiment in terms of the physical
+balance relationships of the mid-troposphere.
+
+2.1  Hypsometric relationship and the T→Z coupling chain
+---------------------------------------------------------
+The hypsometric equation states:
+  Z(p2) - Z(p1) = -(R/g) * integral from p1 to p2 of T d(ln p)
+
+where R is the gas constant for dry air and g = 9.80665 m/s2. This means that
+the geopotential height at a given pressure level is determined by the vertically
+integrated temperature of the atmospheric column below it. At 500 hPa, Z500 is
+set primarily by the mean temperature of the 1000–500 hPa layer.
+
+The T-insertion experiment (inserting correct T500 at every step) reduces the
+Z500 MAB by 40.3%: from 588.4 to 351.3 m2/s2. This is direct empirical evidence
+that FCNv2 has internalized a version of the hypsometric relationship. When the
+500 hPa temperature is anchored to truth, the model's Z500 field improves because
+the model uses T500 information to diagnose Z500 through its learned equivalent
+of the hypsometric integral.
+
+However, the 59.7% residual Z500 error after T500 insertion reveals an important
+limitation: FCNv2's T→Z coupling is single-level. The real hypsometric equation
+integrates temperature across the entire column. Correcting T only at 500 hPa
+while leaving T at 300, 700, and 1000 hPa uncorrected still leaves large column-
+integrated temperature errors that manifest as Z500 bias. FCNv2 has apparently
+not learned to extrapolate the single-level temperature correction to other levels
+through baroclinic consistency — it knows T500 relates to Z500, but not how
+much correction at 500 hPa should propagate to constrain Z at adjacent levels.
+
+2.2  Geostrophic balance: the Z→Wind coupling
+----------------------------------------------
+Geostrophic balance in pressure coordinates reads:
+  U_g = -(1/f) * (1/a) * dZ/dlambda
+  V_g = +(1/f) * (1/a) * dZ/dphi
+
+where f is the Coriolis parameter, a is Earth's radius, and lambda, phi are
+longitude and latitude. This relationship states that the geopotential gradient
+determines the geostrophic wind.
+
+The Z-insertion experiment reduces U500 bias by 72.0% and V500 bias by 80.2%.
+These numbers are a direct measurement of the "geostrophic fraction" of FCNv2's
+wind field in the mature phase: approximately 72–80% of the wind error is
+attributable to the wrong geopotential, and the remaining 20–28% represents
+ageostrophic wind errors that persist even when Z500 is correct.
+
+The 20–28% ageostrophic residual is physically sensible. At 500 hPa in the
+extratropics, ageostrophic motions are associated with: (1) jet streak divergence
+and convergence, (2) frontal circulations, (3) upper-level divergence associated
+with precipitation systems, and (4) inertial oscillations. These processes are
+dynamically important but not captured by linear geostrophy. The fact that FCNv2
+retains approximately 20–28% ageostrophic wind error even when Z500 is perfect
+suggests that the model has learned some ageostrophic dynamics (otherwise this
+residual would be larger), but cannot generate the full spectrum of ageostrophic
+motions from a geopotential boundary condition alone.
+
+This 20–28% ageostrophic fraction can also be understood architecturally: the
+AFNO model sees all 73 channels simultaneously and can, in principle, compute any
+function of the input state. The fact that Z500→Wind correction is 72–80% and not
+100% means either (a) the model genuinely learned the physical ageostrophic
+motions that a geostrophically-initialized atmosphere generates, or (b) the
+remaining wind errors are at small spatial scales that the model's spectral
+representation poorly resolves even with a correct large-scale Φ. Both
+interpretations suggest a fundamental limitation: true ageostrophic dynamics
+requires time integration of the primitive equations, which the ML model
+approximates in a single forward pass.
+
+2.3  Thermal wind balance: the T→Wind coupling
+-----------------------------------------------
+Thermal wind balance is the vertical derivative of geostrophic balance:
+  dV_g/d(ln p) = (R/f) * k_hat x grad_p(T)
+
+This says that the vertical shear of the geostrophic wind is proportional to the
+horizontal temperature gradient at that level. Inserting correct T500 reduces
+U500 MAB by 20.7% and V500 MAB by 30.2%. These numbers measure the "thermal
+wind fraction" of FCNv2's wind error.
+
+The fact that T500 insertion improves winds less than Z500 insertion (21–30% vs.
+72–80%) reveals the hierarchy: FCNv2 represents the geostrophic balance
+(Z→Wind) more accurately than the thermal wind balance (T→Wind). This makes
+physical sense because thermal wind relates temperature gradients at one level
+to the wind shear across a finite vertical distance, requiring multi-level
+consistency. The model can use the large-scale Z500 pattern (set by the full
+column temperature) better than it can use the single-level temperature gradient.
+
+2.4  Wind-driven geopotential: the reverse coupling
+----------------------------------------------------
+The Z-insertion experiment reveals the hierarchy most clearly: Z500→T500 reduction
+is 88.2%, Z500→Wind500 reduction is 70.5%. Compare to T-insertion's Z500 reduction
+of 40.3%. This tells us that in FCNv2:
+
+  Z500 → T500 and Wind500  (strong, 70–88% correction)
+  Wind → Z500              (moderate, 65% correction)
+  T500 → Z500              (weaker, 40% correction)
+
+The wind-insertion's Z500 correction of 65% is the most physically interesting
+cross-coupling. It reflects two distinct physical pathways:
+
+(a) Horizontal advection of geopotential:
+    dZ/dt ~ -V . grad(Z)
+    Correct winds directly advect the geopotential field correctly, reducing the
+    spatial phase errors that dominate the Z500 bias.
+
+(b) Vorticity forcing of geopotential:
+    The omega-equation links vertical motion (and hence mass convergence/divergence)
+    to the geopotential tendency:
+    nabla^2(Z_tendency) ~ f * dVort/dp + ...
+    Correct U, V fields generate better vorticity patterns, which drive better
+    geopotential tendencies.
+
+The 35% residual Z500 error after wind insertion (204 m2/s2 out of 588 m2/s2)
+suggests that these advection and vorticity-forcing pathways account for only
+65% of Z500 error generation. The remaining 35% arises from thermodynamic
+sources: incorrect diabatic heating, radiative cooling, and latent heat release
+that the model computes from the (uncorrected) temperature and moisture fields.
+FCNv2 does not have explicit representations of these processes; they are
+embedded in the neural network weights as statistical patterns. When T500 is
+wrong (in the wind-insertion run), the model's implicit diabatic parameterization
+also generates errors, which propagate into Z500.
+
+2.5  The geopotential as master variable: emergent hierarchy
+------------------------------------------------------------
+Ranking insertion experiments by their total cross-variable correction power:
+
+  Z-insertion  : corrects T500 88%, U500 72%, V500 80%, Wind500 71%  → total ~331%
+  Wind-insertion: corrects T500 41%, Z500 65%                         → total ~106%
+  T-insertion  : corrects U500 21%, V500 30%, Z500 40%, Wind500 14%  → total ~105%
+
+The Z500 field is the dominant control variable in FCNv2's dynamics. This is
+consistent with quasi-geostrophic theory, where Φ (or the streamfunction ψ = Φ/f)
+determines the entire flow field through the elliptic inversion:
+  nabla^2(ψ) + beta * d(ψ)/dy = PV_anomaly
+
+In quasi-geostrophic dynamics, potential vorticity (PV) can be inverted to
+recover the entire balanced state (Φ, T, U, V) at all levels from a single
+scalar field. FCNv2 has effectively learned this inversion approximately: given
+correct Z500 at one level, it reconstructs temperature (88%) and winds (72–80%)
+with high fidelity. This is a remarkable emergent result — the model has discovered
+from data alone that Z500 is a sufficient statistics for the mid-tropospheric state.
+
+================================================================================
+3. WHAT FCNv2 DOES NOT UNDERSTAND: PHYSICAL PROCESSES ABSENT FROM THE LEARNED
+   DYNAMICS
+================================================================================
+
+3.1  Potential vorticity conservation
+--------------------------------------
+In adiabatic, frictionless flow, Ertel potential vorticity:
+  PV = (f + zeta_theta) / delta_theta
+
+is materially conserved following the three-dimensional flow. PV conservation
+is the fundamental constraint that prevents the atmosphere from developing
+arbitrary circulation patterns — it forces the flow to stay on PV isosurfaces.
+
+FCNv2's training loss does not include any PV conservation constraint. Over 120
+autoregressive steps, the model's state vector drifts off the manifold of
+physically realizable PV-conserving flows. The growing Z500 bias (reaching 9,389
+m2/s2 in some locations) is a manifestation of this drift: the model develops
+spurious PV anomalies that would require diabatic heating rates far exceeding
+anything in the real atmosphere to generate. A physical model would resist these
+states through PV constraints; FCNv2 accumulates them step by step.
+
+3.2  Geostrophic adjustment
+----------------------------
+When an imbalance exists between the wind and pressure fields (e.g., after an
+observation is inserted), the atmosphere responds by radiating inertia-gravity
+waves that carry away the imbalance and restore geostrophic balance on an inertial
+timescale tau ~ 1/f ~ 12 hours at mid-latitudes. This process is called
+geostrophic adjustment (Rossby, 1938; Blumen, 1972).
+
+FCNv2 performs no geostrophic adjustment. When T-insertion creates a thermal
+imbalance (correct T500 but wrong Z500), the model simply maps forward with
+this inconsistent state without any balance restoration. The imbalance either
+persists or triggers spurious responses that may worsen other variables. This is
+the mechanism behind the 9.57% "temp-insertion worst" failure mode: in those
+regions, the imbalanced state created by T-only insertion causes the model to
+adjust Z500 in the wrong direction because the adjustment process requires
+the full multivariate state (not just T500) to compute correctly.
+
+This absence of adjustment also explains why Z-insertion is so powerful: Z500 is
+the "balanced variable" — inserting it gives the model the most complete balanced
+state possible at one level, minimizing the spurious adjustment responses.
+
+3.3  Nonlinear wave-wave interactions and energy cascade
+---------------------------------------------------------
+Baroclinic life cycles in the real atmosphere proceed through: (1) linear
+instability and growth of Rossby wave modes, (2) nonlinear wave saturation and
+breaking, (3) irreversible PV mixing across isentropes, (4) transfer of energy
+from baroclinic eddies to the mean flow and to barotropic Rossby waves. This
+sequence completes in approximately 7–14 days and recurs throughout the extratrop-
+ical storm tracks.
+
+FCNv2 has learned the statistical outcome of this cycle from the ERA5 training
+data, but cannot reproduce the underlying nonlinear dynamics. The AFNO architecture
+operates globally at the same resolution for all wavenumbers — it does not perform
+the multiscale cascade that characterizes turbulent atmospheric flows. Over 60
+days, multiple baroclinic life cycles should occur; the model's inability to
+correctly simulate these cycles is the deepest source of its mature-phase bias.
+
+The consequence is visible in the spatial structure of the Z500 bias: the model's
+largest errors (reaching -9,389 m2/s2 locally) are not distributed randomly but
+concentrate in the storm track regions where baroclinic activity is highest and
+nonlinear wave breaking is most frequent. These are exactly the regions where the
+statistical autoregressive approach breaks down most severely.
+
+3.4  Conservation laws absent from the ML framework
+----------------------------------------------------
+The following conservation laws are explicitly enforced in dynamical core NWP
+models but are NOT encoded in FCNv2's training objective:
+
+(a) Mass conservation: integral of density dV = constant
+    Evidence: FCN can develop Z500 biases that imply mass redistribution beyond
+    what surface pressure changes would allow.
+
+(b) Energy conservation: d/dt(KE + APE) = diabatic source - dissipation
+    Evidence: the systematic Wind500 bias of -1.01 m/s and negative Z500 mean
+    bias indicate a slow, net kinetic energy loss from the model atmosphere.
+    A physical model's dissipation is balanced by thermal forcing; FCNv2's
+    "dissipation" is the implicit smoothing of its spectral representation.
+
+(c) Angular momentum conservation: the mean westerly flow is maintained in NWP
+    by the mountain torque and surface stress balance. FCNv2's near-zero U500
+    mean bias (-0.03 m/s) suggests this constraint is approximately satisfied
+    in a statistical sense, but the large spatial errors indicate the zonal-
+    asymmetric component of the flow is unconstrained.
+
+3.5  Radiative-dynamical feedback and the "climate drift"
+---------------------------------------------------------
+Over timescales beyond ~2 weeks, the real atmospheric circulation is shaped by
+the radiative equilibrium temperature profile and the diabatic heating from the
+ocean, land surface, and precipitation. Without explicit radiative transfer or
+land-surface coupling, FCNv2's atmosphere has no mechanism to relax back toward
+radiative-convective equilibrium when it drifts away. The -0.52 K T500 mean bias
+and -14.7 m Z500 mean bias are early signatures of this "climate drift" — if the
+model were run for months, the biases would grow further until the model settled
+into its own statistical equilibrium (the "model climate"), which differs from
+the ERA5 climate because the ML-learned dynamics does not conserve the correct
+energy and momentum budgets.
+
+================================================================================
+4. ML ARCHITECTURAL ANALYSIS: HOW FOURCASTNETV2'S DESIGN SHAPES THE BIAS
+   STRUCTURE
+================================================================================
+
+4.1  The AFNO architecture and its spectral implications
+--------------------------------------------------------
+FourCastNetv2 employs the Adaptive Fourier Neural Operator (AFNO; Guibas et al.,
+2021) within a Vision Transformer (ViT) backbone. The key computational step is:
+
+  x_out = IFFT(W(k) * FFT(x_in))
+
+where x is the 2D atmospheric field, FFT/IFFT are the Fast Fourier Transforms,
+and W(k) is a learnable complex weight matrix for each wavenumber k. This
+architecture mixes spatial information globally in spectral space, giving each
+output grid point access to the global atmospheric state through the wavenumber
+representation.
+
+Consequence for bias structure: AFNO errors are spectrally coherent. A learned
+weight W(k) that is slightly wrong for a given wavenumber does not produce a
+local error — it produces a global, wavenumber-k-shaped error pattern that
+projects onto all grid points simultaneously. This is why the Z500 bias extremes
+are so large: a slight phase or amplitude error in the model's representation of
+planetary waves (wavenumber 2–6) projects onto ~1,000–10,000 grid points, creating
+the large-amplitude, spatially coherent bias patterns seen in Figure 5.43. In
+contrast, a physical model's errors are local: a parameterization error at one
+grid point affects only its neighborhood through horizontal diffusion and advection.
+
+4.2  Auto-regressive error accumulation in spectral space
+---------------------------------------------------------
+FCNv2 performs 120 sequential forward passes (12-hr steps) over 60 days. Each
+pass has an associated truncation error epsilon. In spectral space, the amplification
+factor for wavenumber k after n steps is:
+
+  |error_n(k)| = |epsilon(k)| * |lambda(k)|^n
+
+where lambda(k) is the effective "growth rate" of perturbation mode k. For the
+atmosphere, lambda < 1 for stable modes (planetary waves) and lambda > 1 for
+growing modes (baroclinic eddies). FCNv2's learned W(k) must approximate these
+spectral amplification factors from data.
+
+The Z500 MAB of 588 m2/s2 after 60 days (120 steps), compared to approximately
+~1,500–2,000 m2/s2 of typical Z500 spatial standard deviation in the real
+atmosphere, represents ~30–40% normalized error. Assuming a roughly exponential
+growth rate: 588/initial_error = exp(120 * gamma), where initial_error is the
+typical Z500 error at forecast initialization. If the initial error is ~5 m2/s2
+(excellent analysis), the error has grown by a factor of ~100 in 120 steps, implying
+gamma ~ 0.038 per step or an e-folding time of ~26 steps = 13 days. This is
+comparable to the atmospheric predictability time scale of ~2 weeks, suggesting
+FCNv2's Z500 error growth rate is physically plausible but not better than the
+theoretical limit, and certainly much worse than operational NWP models in the
+2–4 week extended range.
+
+4.3  Multi-head attention and teleconnections
+---------------------------------------------
+The ViT backbone uses multi-head self-attention to combine information across
+all patch embeddings (each patch ~ 4x4 grid points in the 0.25-degree
+representation). Attention heads are believed to capture teleconnection patterns
+(e.g., PNA, NAO, ENSO teleconnections) by learning which distant regions covary
+in the ERA5 training data.
+
+The insertion experiment results provide indirect evidence about what these
+attention heads represent:
+
+  - Z500 insertion corrects T500 by 88%: strong Z-T attention heads exist that
+    encode the hypsometric relationship globally.
+  - Z500 insertion corrects Wind500 by 71%: Z-Wind attention heads encode
+    geostrophic balance.
+  - T500 insertion corrects Z500 by only 40%: the T→Z heads are weaker, suggesting
+    the model has learned that Z determines T more strongly than T determines Z.
+    This reflects the physical hierarchy: in the real atmosphere, Z is the more
+    slowly-varying "memory" variable and T responds to it rapidly, not the reverse.
+
+The 0% "all insertions worsen" area (Class 2 in Figure 5.47) is an important
+finding: there is no region of the globe where all three insertions simultaneously
+increase Z500 bias. This means the attention mechanism always provides at least
+some correctly-directed response to any single-variable correction. The model's
+failure mode is one of incomplete coupling, not of inverted coupling.
+
+4.4  The 73-channel representation and channel coupling
+-------------------------------------------------------
+FCNv2 processes 73 channels simultaneously: 8 surface variables + 5 variables
+(u, v, z, t, r) at 13 pressure levels (50–1000 hPa). The AFNO mixing operates
+across all channels at each forward step, so information from one channel
+propagates to all others.
+
+The insertion experiments measure the effective cross-channel coupling strength:
+
+  Coupling strength(A → B) = 1 - [MAB(B, with A inserted)] / [MAB(B, control)]
+
+Key coupling strengths measured:
+  Z500 → T500   : 0.882  (very strong, near hypsometric theoretical maximum)
+  Z500 → U500   : 0.720  (strong, geostrophic balance)
+  Z500 → V500   : 0.802  (strong, geostrophic balance, higher for V than U)
+  Wind → Z500   : 0.652  (moderate, advection-vorticity pathway)
+  T500 → Z500   : 0.403  (weaker, incomplete hypsometric inversion)
+  T500 → U500   : 0.207  (weak, thermal wind)
+  T500 → V500   : 0.302  (weak, thermal wind, higher for V)
+
+The asymmetry between V500 coupling (higher) and U500 coupling (lower) in both
+T→Wind and Z→Wind pathways suggests that the model represents the meridional
+component of balanced flow better than the zonal component. This could reflect
+a training bias: in the extratropics, V500 anomalies are more strongly correlated
+with both Z500 gradients (through geostrophy) and T500 gradients (through thermal
+wind) than U500, because the dominant zonal-wavenumber-2 to -4 Rossby wave
+pattern induces stronger meridional flow variations than zonal flow variations.
+
+4.5  The smoothing bias of the L2 loss function
+------------------------------------------------
+FCNv2 was trained using a mean-squared-error (MSE / L2) loss. From a statistical
+perspective, minimizing E[||y_pred - y_true||^2] produces predictions that converge
+to the conditional mean E[y_true | x_input] rather than to any single realization.
+As forecast lead time increases, the conditional mean becomes smoother (uncertainty
+grows, the support of the conditional distribution broadens), and the model's
+predictions approach the climatological mean field.
+
+This "regression to the mean" is the statistical mechanism behind:
+(a) The Wind500 mean bias of -1.01 m/s (speeds underestimated, approaching
+    climatological mean speed which is lower than instantaneous speeds)
+(b) The T500 min bias of -26 K and max bias of +22 K (extreme temperature
+    anomalies are systematically underestimated)
+(c) The Z500 range collapse (observed range: 46,097–58,489 m2/s2; model range
+    in mature phase is narrowed toward the mean)
+
+The L2 loss creates a spectral penalty on high wavenumbers: sharp gradients have
+high spatial frequency content, and the MSE penalty on these wavenumbers causes
+the model to learn weights that smooth them. Over 120 autoregressive steps, this
+smoothing compounds multiplicatively, leading to the progressive spectral reddening
+(energy transfer from high to low wavenumbers) visible as the forecast extends
+into the mature phase.
+
+4.6  Implications of the failure-mode classification (Figure 5.47)
+------------------------------------------------------------------
+Area-weighted classification of Z500 failure modes:
+  Class 0 - Neutral / mixed        : 38.84%
+  Class 1 - All insertions improve : 32.04%
+  Class 2 - All insertions worsen  :  0.00%
+  Class 3 - Temp-insertion best    :  0.00%
+  Class 4 - Wind-insertion best    :  0.00%
+  Class 5 - Geo-insertion best     : 18.11%
+  Class 6 - Temp-insertion worst   :  9.57%
+  Class 7 - Wind-insertion worst   :  1.44%
+  Class 8 - Geo-insertion worst    :  0.00%
+
+The 32% "all insertions improve" class represents regions where the model's error
+is well-distributed across multiple variables: the balanced dynamics are wrong, and
+correcting any single variable helps. These are likely the main storm track regions
+where baroclinic activity drives correlated T-Z-Wind errors.
+
+The 18% "geo-insertion best alone" class is highly significant. These are regions
+where temperature or wind insertion is not sufficient to correct Z500, but Z500
+self-correction dramatically outperforms. These regions likely correspond to areas
+where the model's Z500 error has been generated by processes entirely internal to
+the geopotential field (e.g., spurious Rossby wave propagation, incorrect barotrop-
+ic wave speeds) that cannot be corrected by constraining either T or Wind alone.
+Physically, these are regions where the atmospheric dynamics are barotropic: the
+Z500 pattern is driven by the integrated effect of upper-level divergence and
+convergence from non-local processes rather than by the local T or V gradients.
+
+The 9.57% "temp-insertion worst" class has the most profound implications for
+data assimilation design. These are regions where inserting correct T500 worsens
+the Z500 forecast. The mechanism is analysis shock: the model has developed an
+internally consistent (though wrong) balanced state. Inserting truth T500 into
+this state creates a thermal-dynamical imbalance. FCNv2 responds to this imbalance
+not by the correct geostrophic adjustment (which requires rotating the full pressure-
+wind field) but by a learned response that may move Z500 in the wrong direction
+because the surrounding atmospheric state (winds, geopotential at other levels)
+is still wrong. This is the ML equivalent of the well-known "analysis increment
+shock" problem in variational data assimilation: increments applied without proper
+balance constraints can temporarily worsen the forecast.
+
+The 0% for Classes 2, 3, 4, and 8 is a reassuring result:
+  - Class 2 = 0%: No region where ALL insertions worsen Z500 simultaneously.
+    This means there is no "attractor trap" where the model is stuck in a state
+    so wrong that any correct information makes things worse.
+  - Class 3 = 0%, Class 4 = 0%: Temperature or wind insertion alone is never
+    the best strategy. When it helps, it does so in combination with other
+    improvements (Class 1), not in isolation.
+  - Class 8 = 0%: Geopotential insertion never worsens Z500 globally. Given
+    that Z-insertion sets Z500 to truth exactly, this confirms the trivial
+    non-negativity property of the analysis.
+
+================================================================================
+5. SYNTHESIS: WHAT FCNv2 HAS AND HAS NOT LEARNED
+================================================================================
+
+HAS LEARNED (empirically demonstrated by insertion experiments):
+  1. Geostrophic balance: Z500 → wind coupling at 72–80% efficiency
+  2. Hypsometric relationship: Z500 → T500 coupling at 88% efficiency
+  3. Horizontal advection of T and Z by the wind field (Wind→T: 41%, Wind→Z: 65%)
+  4. Statistical thermal wind: T500 → Wind coupling at 21–30%
+  5. The hierarchy of atmospheric state variables: Z500 is the "master variable"
+     encoding more information about the atmospheric state than T or Wind alone
+  6. Globally coherent teleconnection patterns via attention mechanism
+  7. Short-to-medium range Rossby wave propagation (implicit in spectral weights)
+
+HAS NOT LEARNED (revealed by persistent mature-phase errors):
+  1. Potential vorticity conservation (leading to spurious PV anomalies)
+  2. Geostrophic adjustment dynamics (no balance restoration after perturbation)
+  3. Full nonlinear baroclinic wave life cycles (energy cascade failure)
+  4. Mass and energy conservation (slow systematic drift)
+  5. Radiative-dynamical equilibrium feedback (climate drift without restoring force)
+  6. Multi-level hypsometric consistency (single-level T correction is insufficient
+     to correct Z through the full column integral)
+  7. Ageostrophic dynamics at fronts and in jet streaks (~20-28% residual wind error
+     after Z-insertion)
+  8. Correct balanced adjustment in dynamically inconsistent states (10% failure
+     region of T-insertion)
+
+================================================================================
+6. IMPLICATIONS FOR DATA ASSIMILATION WITH ML MODELS
+================================================================================
+
+6.1  Optimal control variable for ML-based 4D-Var
+--------------------------------------------------
+The finding that Z500 corrects all other variables more efficiently than T500 or
+Wind500 suggests that any variational data assimilation (3D-Var or 4D-Var) scheme
+for FCNv2 should adopt Z500 (or geopotential at multiple levels) as the primary
+control variable. This is consistent with standard NWP DA practice, where the
+"balanced" control variable is a linearized streamfunction-like variable. For
+FCNv2, this means that observation operators for temperature and wind should map
+through a Z-centric balance operator to avoid the analysis shock pathways that
+the univariate T-insertion reveals.
+
+6.2  Multivariate vs. univariate insertion: the balance constraint
+------------------------------------------------------------------
+The 9.57% "temp-insertion worst" area quantifies the "analysis shock" risk from
+univariate observation insertion. A proper ensemble Kalman filter (EnKF) or
+4D-Var would propagate the T500 observation increment to Z500 and Wind500
+simultaneously through the background error covariance matrix B. The B matrix
+for FCNv2 should encode the coupling strengths measured in this analysis:
+
+  B(Z500, T500) = O(0.88) * sigma(Z500) * sigma(T500)   [strong positive]
+  B(Z500, U500) = O(0.72) * sigma(Z500) * sigma(U500)   [strong positive]
+  B(T500, Z500) = O(0.40) * sigma(T500) * sigma(Z500)   [moderate]
+
+These empirically-derived covariances could serve as the foundation for a
+climatological background error covariance for ML-based ensemble DA.
+
+6.3  Observation type ranking for extended-range applications
+-------------------------------------------------------------
+For extended-range (30–60 day) forecasts with FCNv2, the insertion experiments
+suggest the following observing system priority:
+
+  Priority 1: Geopotential height / thickness observations
+    (radiosonde geopotential, GPS-RO refractivity, AMSU-A radiance that
+    constrains tropospheric Z)
+    → Corrects T by 88%, Wind by 71–80%, Z by 100%
+
+  Priority 2: Wind observations (radiosonde winds, AMVs, Aeolus lidar winds)
+    → Corrects Z by 65%, T by 41%
+
+  Priority 3: Temperature observations (IASI, radiosonde T, ATMS brightness T)
+    → Corrects Z by 40%, Wind by 21–30%, but with 10% risk of local worsening
+
+This ranking differs from NWP practice in the medium range (1–10 days), where
+temperature observations (infrared/microwave sounders) have historically been
+the most impactful. For ML models with spectral dynamics centered on Z500, the
+geopotential constraint is paramount.
+
+6.4  Insertion frequency and the error doubling time
+----------------------------------------------------
+The e-folding time for Z500 error growth is approximately 13 days (Section 4.2),
+similar to the atmospheric predictability limit. For an insertion cycle to be
+effective, observations should be inserted at a frequency comparable to or shorter
+than this time scale. The 12-hourly insertion cycle used in these experiments
+is well within the error growth time scale and achieves dramatic corrections
+(65–88%). A 6-day insertion cycle (the standard extended-range window) would
+allow errors to grow by exp(6/13) ~ 1.6x between insertions and would be
+significantly less effective. This has direct implications for the design of
+future hybrid ML/NWP data assimilation cycles: frequent (6–12 hourly) state
+correction is necessary to control ML model error growth in the extended range.
+
+================================================================================
+7. COMPARISON WITH EXISTING LITERATURE
+================================================================================
+
+The finding that FCNv2's Z500 MAB reaches ~588 m2/s2 (~60 m) at day 30–60 is
+consistent with published evaluations of similar ML weather models. Pathak et al.
+(2022, the original FourCastNet paper) showed that FourCastNet skill in Z500
+drops to below climatology beyond approximately day 10–14, with RMSE exceeding
+the climatological standard deviation. The mature-phase biases observed here are
+therefore not surprising — they represent the known predictability horizon of
+current ML weather models.
+
+What this analysis adds beyond previous work is:
+  (1) A quantitative decomposition of Z500 error into T-induced, wind-induced, and
+      dynamically-internal components: 40% thermal, 65% kinematic, ~35% diabatic/
+      structural residuals (with overlap from multiple corrections).
+  (2) Empirical measurement of FCNv2's geostrophic coupling efficiency (72–80%)
+      compared to the theoretical maximum of 100%.
+  (3) Identification of the 10% failure region where T-insertion worsens Z500,
+      providing a direct measurement of analysis shock risk for ML-based DA.
+  (4) The finding that Z500 corrects T500 at 88% efficiency — higher than any
+      other cross-variable coupling — which is not directly derivable from the
+      standard RMSE evaluations published in the literature.
+
+The comparison with Aurora (Microsoft's 1.3B-parameter model, shown separately
+in Chapter 5) would be valuable: if Aurora's insertion experiments show higher
+geostrophic coupling efficiency and smaller failure-mode areas, it would suggest
+that model scale and architectural sophistication (Aurora uses 3D attention across
+pressure levels) measurably improves the representation of atmospheric balance
+relationships.
+
+================================================================================
+8. CONCLUSION
+================================================================================
+
+The Section 5.8 spatial bias analysis reveals a coherent picture of what
+FourCastNetv2 has and has not learned about the physics of the mid-troposphere.
+The model has internalized the three fundamental linear balance relationships of
+quasi-geostrophic theory (hypsometric, geostrophic, thermal wind) with coupling
+efficiencies of 40–88%, with geopotential height (Z500) emerging as the master
+variable that best constrains the full atmospheric state. The dominant failure
+mode is the accumulation of dynamically inconsistent atmospheric states in the
+mature phase (days 30–60), driven by the absence of potential vorticity
+conservation, geostrophic adjustment, and nonlinear wave-wave interactions in
+the learned autoregressive dynamics.
+
+The most actionable finding for data assimilation is the identification of the
+optimal control variable (Z500) and the quantification of analysis shock risk from
+univariate T-insertion (9.57% of global area). These results provide a physically
+grounded foundation for designing observation-space and state-space corrections
+for ML weather models in the extended range, and motivate the use of multivariate,
+balanced increment approaches rather than simple channel-by-channel insertion.
+
+================================================================================
+References
+================================================================================
+Blumen, W. (1972). Geostrophic adjustment. Rev. Geophys. Space Phys., 10, 485–528.
+Guibas, J. et al. (2021). Adaptive Fourier neural operators: Efficient token
+  mixers for transformers. ICLR 2022.
+Lorenz, E.N. (1955). Available potential energy and the maintenance of the general
+  circulation. Tellus, 7, 157–167.
+Pathak, J. et al. (2022). FourCastNet: A global data-driven high-resolution
+  weather model using adaptive Fourier neural operators. arXiv:2202.11214.
+Rossby, C.G. (1938). On the mutual adjustment of pressure and velocity
+  distributions in certain simple current systems II. J. Mar. Res., 1, 239–263.
+Hoskins, B.J., McIntyre, M.E., Robertson, A.W. (1985). On the use and significance
+  of isentropic potential vorticity maps. Q. J. R. Meteorol. Soc., 111, 877–946.
+================================================================================
+END OF ANALYSIS
+================================================================================
